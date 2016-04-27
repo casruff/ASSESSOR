@@ -409,9 +409,9 @@ par_jags <- c("alpha","mu_Rkr_a","Rkr_b","Sp","Rec","tot_ln_Rec","ln_RS",
 ## 3. MCMC control params
 # MCMC parameters
 mcmc_chains <- 4
-mcmc_length <- 10e5
-mcmc_burn <- 5e5
-mcmc_thin <- 1000
+mcmc_length <- 10e4
+mcmc_burn <- 5e4
+mcmc_thin <- 100
 # total number of MCMC samples
 mcmc_samp <- (mcmc_length-mcmc_burn)*mcmc_chains/mcmc_thin
 
@@ -507,7 +507,7 @@ mtext("Posterior probability", 2, cex=1.2)
 ## Ricker alpha
 R_alpha_est <- mod_fit$BUGSoutput$sims.list$alpha
 alphaCI <- quantile(R_alpha_est,c(0.025,0.5,0.975))
-hist(R_alpha_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_alpha_est)/0.1)*0.1,0.1),
+hist(R_alpha_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_alpha_est)/0.2)*0.2,0.2),
      col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")
 aHt <- (par()$usr[4]-par()$usr[3])/10
 arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")
@@ -525,7 +525,7 @@ par(mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))
 RbDat <- mod_fit$BUGSoutput$sims.list$Rkr_b
 RbDat <- RbDat*10^abs(floor(log(max(RbDat),10)))
 ylM <- max(RbDat)
-brks <- seq(0,ceiling(ylM),0.1)
+brks <- seq(0,ceiling(ylM),0.05)
 betaCI <- quantile(RbDat,c(0.025,0.5,0.975))
 hist(RbDat, freq=FALSE, breaks=brks, col=clr, border="blue3",
 	 xlab="", xaxt="n", yaxt="n",
@@ -549,7 +549,7 @@ par(mfrow=c(ncol(covars),2), mai=c(0.4,0.2,0.1,0.1), omi=c(0.2,0.4,0,0))
 ylN <- floor(min(covars)*10)/10
 ylM <- ceiling(max(covars)*10)/10
 brks <- seq(ylN,ylM,length.out=diff(c(ylN,ylM))*40+1)
-cov_names <- c("Flow","H releases","PDO")
+cov_names <- c("Flow","PDO","H releases")
 tSeries <- seq(yr_frst,length.out=n_yrs-age_min)
 for(i in 1:ncol(covars)) {
 	# plot covar ts

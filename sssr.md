@@ -95,7 +95,7 @@ if(!require("gsl")) {
 }
 ```
 
-The last thing we'll need is the following function for trimming real numbers to a desired precision in the plots.
+The last thing we'll need is the following function for trimming real numbers to a desired precision when plotting output.
 
 
 ```r
@@ -309,7 +309,7 @@ model {
 	# brood years 2:(n_yrs-age_min)
 	for(t in 2:(n_yrs-age_min+n_fore)) {
 		# predicted recruits in BY t
-		ln_Rkr_a[t] <- Rkr_a + c_PDO*dat_cvrs[t,1] + c_Flow*dat_cvrs[t,2] + c_Hrel*dat_cvrs[t,3];
+		ln_Rkr_a[t] <- Rkr_a + c_Flow*dat_cvrs[t,1] + c_PDO*dat_cvrs[t,2] + c_Hrel*dat_cvrs[t,3];
 		E_ln_Rec[t] <- ln_Sp[t] + ln_Rkr_a[t] - Rkr_b*Sp[t];
 		tot_ln_Rec[t] ~ dnorm(E_ln_Rec[t] + phi*res_ln_Rec[t-1],tau_Qr);
 		res_ln_Rec[t] <- tot_ln_Rec[t] - E_ln_Rec[t];
@@ -408,9 +408,9 @@ par_jags <- c("alpha","mu_Rkr_a","Rkr_b","Sp","Rec","tot_ln_Rec","ln_RS",
 ## 3. MCMC control params
 # MCMC parameters
 mcmc_chains <- 4
-mcmc_length <- 10e5
-mcmc_burn <- 5e5
-mcmc_thin <- 1000
+mcmc_length <- 10e4
+mcmc_burn <- 5e4
+mcmc_thin <- 100
 # total number of MCMC samples
 mcmc_samp <- (mcmc_length-mcmc_burn)*mcmc_chains/mcmc_thin
 
@@ -449,7 +449,7 @@ mod_fit <- do.call(jags.parallel, mod_jags)
 
 ```
 ## elapsed 
-##    34.3
+##       4
 ```
 
 ## Model diagnostics
@@ -476,7 +476,7 @@ round(length(bad_Rhat)/length(rh),2)
 ```
 
 ```
-## [1] 0.04
+## [1] 0.09
 ```
 
 ```r
@@ -488,8 +488,8 @@ table(par_names)
 
 ```
 ## par_names
-## p_vec 
-##    25
+## p_vec   Rec 
+##    31    20
 ```
 
 ```r
@@ -501,31 +501,57 @@ idx <- as.integer(sub("(^.*\\[)([0-9]{1,3})(.*)","\\2",names(bad_Rhat)))
 
 ```
 ##      par index
-## 1  p_vec     1
-## 2  p_vec     2
-## 3  p_vec     3
-## 4  p_vec     4
-## 5  p_vec     5
-## 6  p_vec     6
-## 7  p_vec     7
-## 8  p_vec    10
-## 9  p_vec    11
-## 10 p_vec    12
-## 11 p_vec    13
-## 12 p_vec    15
-## 13 p_vec    16
-## 14 p_vec    17
-## 15 p_vec    18
-## 16 p_vec    21
-## 17 p_vec    23
-## 18 p_vec    24
-## 19 p_vec    25
-## 20 p_vec    28
-## 21 p_vec    29
-## 22 p_vec    30
-## 23 p_vec    32
-## 24 p_vec    33
-## 25 p_vec    34
+## 1    Rec     1
+## 2    Rec     3
+## 3    Rec     4
+## 4    Rec     7
+## 5    Rec     9
+## 6    Rec    10
+## 7    Rec    11
+## 8    Rec    12
+## 9    Rec    15
+## 10   Rec    16
+## 11   Rec    17
+## 12   Rec    20
+## 13   Rec    21
+## 14   Rec    22
+## 15   Rec    23
+## 16   Rec    25
+## 17   Rec    29
+## 18   Rec    31
+## 19   Rec    32
+## 20   Rec    34
+## 21 p_vec     3
+## 22 p_vec    18
+## 23 p_vec    22
+## 24 p_vec     1
+## 25 p_vec     3
+## 26 p_vec     4
+## 27 p_vec     5
+## 28 p_vec     6
+## 29 p_vec     7
+## 30 p_vec     9
+## 31 p_vec    10
+## 32 p_vec    11
+## 33 p_vec    12
+## 34 p_vec    14
+## 35 p_vec    15
+## 36 p_vec    16
+## 37 p_vec    17
+## 38 p_vec    20
+## 39 p_vec    21
+## 40 p_vec    22
+## 41 p_vec    23
+## 42 p_vec    25
+## 43 p_vec    26
+## 44 p_vec    27
+## 45 p_vec    29
+## 46 p_vec    30
+## 47 p_vec    31
+## 48 p_vec    32
+## 49 p_vec    34
+## 50 p_vec    35
+## 51 p_vec    36
 ```
 
 The convergence statistics indicate that some of the elements in $p$ the estimated proportions of the youngest and oldest age classes (i.e., 3 and 8, respectively) did not converge to our desired threshold. However, there is very little data to inform those parameters, so we should not be too concerned.
@@ -543,15 +569,15 @@ print(mod_fit$BUGSoutput$summary[c("mu_Rkr_a","alpha","Rkr_b",
 ```
 
 ```
-##               mean       sd      2.5%       50%     97.5%
-## mu_Rkr_a  1.255230 2.96e-01  6.72e-01  1.252950  1.804608
-## alpha     3.370154 9.49e-01  1.72e+00  3.275790  5.429281
-## Rkr_b     0.000139 3.82e-05  5.97e-05  0.000139  0.000213
-## c_Flow    0.077796 8.02e-02 -8.56e-02  0.080836  0.228633
-## c_PDO    -0.154729 7.07e-02 -2.90e-01 -0.154424 -0.018158
-## c_Hrel   -0.259889 1.24e-01 -4.65e-01 -0.274342  0.026056
-## var_Qr    0.103135 3.96e-02  4.77e-02  0.095885  0.197874
-## var_Rs    0.023930 2.41e-02  6.40e-05  0.017636  0.085181
+##              mean       sd      2.5%       50%     97.5%
+## mu_Rkr_a  1.23419 2.69e-01  7.17e-01  1.239043  1.716435
+## alpha     3.32706 8.82e-01  1.88e+00  3.254708  5.162843
+## Rkr_b     0.00014 3.46e-05  6.91e-05  0.000141  0.000205
+## c_Flow   -0.17016 7.02e-02 -3.09e-01 -0.169212 -0.037487
+## c_PDO     0.10348 7.78e-02 -5.59e-02  0.107107  0.244819
+## c_Hrel   -0.27353 1.12e-01 -4.65e-01 -0.285162 -0.019396
+## var_Qr    0.09510 3.71e-02  4.39e-02  0.088995  0.188168
+## var_Rs    0.02244 2.27e-02  2.37e-04  0.016036  0.080266
 ```
 
 
@@ -576,7 +602,7 @@ mtext("Posterior probability", 2, cex=1.2)
 ## Ricker alpha
 R_alpha_est <- mod_fit$BUGSoutput$sims.list$alpha
 alphaCI <- quantile(R_alpha_est,c(0.025,0.5,0.975))
-hist(R_alpha_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_alpha_est)/0.1)*0.1,0.1),
+hist(R_alpha_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_alpha_est)/0.2)*0.2,0.2),
      col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")
 aHt <- (par()$usr[4]-par()$usr[3])/10
 arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")
@@ -597,7 +623,7 @@ par(mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))
 RbDat <- mod_fit$BUGSoutput$sims.list$Rkr_b
 RbDat <- RbDat*10^abs(floor(log(max(RbDat),10)))
 ylM <- max(RbDat)
-brks <- seq(0,ceiling(ylM),0.1)
+brks <- seq(0,ceiling(ylM),0.05)
 betaCI <- quantile(RbDat,c(0.025,0.5,0.975))
 hist(RbDat, freq=FALSE, breaks=brks, col=clr, border="blue3",
 	 xlab="", xaxt="n", yaxt="n",
@@ -624,7 +650,7 @@ par(mfrow=c(ncol(covars),2), mai=c(0.4,0.2,0.1,0.1), omi=c(0.2,0.4,0,0))
 ylN <- floor(min(covars)*10)/10
 ylM <- ceiling(max(covars)*10)/10
 brks <- seq(ylN,ylM,length.out=diff(c(ylN,ylM))*40+1)
-cov_names <- c("Flow","H releases","PDO")
+cov_names <- c("Flow","PDO","H releases")
 tSeries <- seq(yr_frst,length.out=n_yrs-age_min)
 for(i in 1:ncol(covars)) {
 	# plot covar ts
