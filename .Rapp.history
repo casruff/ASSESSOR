@@ -1,0 +1,780 @@
+## ----load_pkgs, message=FALSE, warning=FALSE-----------------------------#
+if(!require("R2jags")) {#
+  install.packages("R2jags")#
+  library("R2jags")#
+}#
+if(!require("RCurl")) {#
+  install.packages("RCurl")#
+  library("RCurl")#
+}#
+if(!require("gsl")) {#
+  install.packages("gsl")#
+  library("gsl")#
+}#
+#
+## ----real2prec-----------------------------------------------------------#
+real2prec <- function(x,map="round",prec=1) {#
+  if(prec==0) stop("\"prec\" cannot be 0")#
+    do.call(map,list(x/prec))*prec#
+}#
+#
+## ----get_user_inputs-----------------------------------------------------#
+## file with escapement data#
+## [n_yrs x 2] matrix of obs counts; 1st col is calendar yr#
+fn_esc <- "SkagitSthdEsc.csv"#
+#
+## file with age comp data#
+## [n_yrs x (1+A)]; 1st col is calendar yr#
+fn_age <- "SkagitSthdAge.csv"#
+## min & max ages#
+age_min <- 3#
+age_max <- 8#
+## years, if any, of age-comp to skip; see below#
+age_skip <- 2#
+#
+## file with catch data#
+## [n_yrs x 2] matrix of obs catch; 1st col is calendar yr#
+fn_harv <- "SkagitSthdCatch.csv"#
+#
+## file with covariate data#
+## [n_yrs x (1+MM)]; 1st col is calendar yr#
+fn_cvrs <- "SkagitEnvCov.csv"#
+#
+## number of years of forecasts#
+n_fore <- 1#
+#
+## file where to save JAGS model#
+fn_jags <- "SkagitSthd_RR_JAGS.txt"#
+#
+## upper threshold for Gelman & Rubin's (1992) potential scale reduction factor (Rhat).#
+Rhat_thresh <- 1.1#
+#
+## URL for example data files#
+## set to NULL if using a local folder/directory#
+ex_url <- "https://raw.githubusercontent.com/mdscheuerell/ASSESSOR/master/"#
+#
+## ----get_escapement_data-------------------------------------------------#
+## escapement#
+#dat_esc <- read.table(paste0(ex_url,fn_esc), header=TRUE, sep=",")#
+dat_esc <- read.csv(text = getURL(paste0(ex_url,fn_esc)))#
+## years of data#
+dat_yrs <- dat_esc$year#
+## number of years of data#
+n_yrs <- length(dat_yrs)#
+## get first & last years#
+yr_frst <- min(dat_yrs)#
+yr_last <- max(dat_yrs)#
+## log of escapement#
+ln_dat_esc <- c(log(dat_esc[,-1]),rep(NA,n_fore))#
+#
+## ----get_age_data--------------------------------------------------------#
+## age comp data#
+dat_age <- read.csv(text = getURL(paste0(ex_url,fn_age)))#
+## drop year col & first age_min+age_skip rows#
+dat_age <- dat_age[-(1:(age_min+age_skip)),-1]#
+## num of age classes#
+A <- age_max-age_min+1#
+## add row(s) of NA's for forecast years#
+dat_age <- rbind(dat_age,matrix(0,n_fore,A,dimnames=list(n_yrs+seq(n_fore),colnames(dat_age))))#
+## total num of age obs by cal yr#
+dat_age[,"sum"] <- apply(dat_age,1,sum)#
+## row indices for any years with no obs age comp#
+idx_NA_yrs <- which(dat_age$sum<A,TRUE)#
+## replace 0's in yrs w/o any obs with NA's#
+dat_age[idx_NA_yrs,(1:A)] <- NA#
+## change total in yrs w/o any obs from 0 to A to help dmulti()#
+dat_age[idx_NA_yrs,"sum"] <- A#
+## convert class#
+dat_age <- as.matrix(dat_age)#
+#
+## ----get_harvest---------------------------------------------------------#
+## harvest#
+dat_harv <- read.csv(text = getURL(paste0(ex_url,fn_harv)))#
+## drop year col & first age_max rows#
+dat_harv <- c(dat_harv[,-1],rep(0,n_fore))#
+#
+## ----get_covariates------------------------------------------------------#
+## covariate(s)#
+dat_cvrs <- read.csv(text = getURL(paste0(ex_url,fn_cvrs)))#
+## drop year col#
+dat_cvrs <- dat_cvrs[,-1]#
+## transform the covariates to z-scores#
+dat_cvrs <- scale(dat_cvrs)#
+#
+## ----SSSR_in_JAGS--------------------------------------------------------#
+cat("#
+#
+model {#
+	#--------#
+	# PRIORS#
+	#--------#
+	# alpha = intrinsic productivity#
+	Rkr_a ~ dnorm(0,1e-3)I(-4,4);#
+	alpha <- exp(Rkr_a);#
+	mu_Rkr_a <- Rkr_a + var_Qr/(2 - 2*phi^2);#
+#
+	# gamma = covariate effect#
+	c_Flow ~ dnorm(0,0.001);#
+	c_PDO ~ dnorm(0,0.001);#
+	c_Hrel ~ dnorm(0,0.001);#
+#
+	# beta = strength of dens depend#
+	Rkr_b ~ dunif(0,0.1);#
+#
+	# AR(1) param for proc errors#
+	phi ~ dunif(-0.999,0.999);#
+	# Qr = process variance for recruits model#
+	sd_Qr ~ dunif(0.001,20);#
+	tau_Qr <- pow(sd_Qr,-2);#
+	var_Qr <- pow(sd_Qr,2)#
+	# innov in yr 1#
+	innov_1 ~ dnorm(0,tau_Qr*(1-phi*phi));#
+	# Rs = variance for Sp obs model#
+	sd_Rs ~ dunif(0.001,20);#
+	tau_Rs <- pow(sd_Rs,-2);#
+	var_Rs <- pow(sd_Rs,2)#
+	# unobservable early total run size#
+	ttl_run_mu ~ dunif(1,5);#
+	ttl_run_tau ~ dunif(1,20);#
+	# unprojectable early recruits;#
+	# hyper mean across all popns#
+	Rec_mu ~ dnorm(0,0.001);#
+	# hyper SD across all popns#
+	Rec_sig ~ dunif(0,100);#
+	# precision across all popns#
+	Rec_tau <- pow(Rec_sig,-2);#
+#
+	# maturity schedule#
+	# unif vec for Dirch prior#
+	for(i in 1:A) { theta[i] <- 1 }#
+	# hyper-mean for maturity#
+	muHD ~ ddirch(theta);#
+	# hyper-prec for maturity#
+	piHD ~ dunif(0.001,1e3);#
+	for(t in 1:(n_yrs-age_min+n_fore)) { p_vec[t,1:A] ~ ddirch(muHD*piHD) }#
+	#------------#
+	# LIKELIHOOD#
+	#------------#
+	# 1st brood yr requires different innovation#
+	# predicted recruits in BY t#
+	ln_Rkr_a[1] <- Rkr_a + c_Flow*dat_cvrs[1,1] + c_PDO*dat_cvrs[1,2] + c_Hrel*dat_cvrs[1,3];#
+	E_ln_Rec[1] <- ln_Sp[1] + ln_Rkr_a[1] - Rkr_b*Sp[1];#
+	tot_ln_Rec[1] ~ dnorm(E_ln_Rec[1] + phi*innov_1,tau_Qr);#
+	res_ln_Rec[1] <- tot_ln_Rec[1] - E_ln_Rec[1];#
+	# MEDIAN of total recruits#
+	tot_Rec[1] <- exp(tot_ln_Rec[1]);#
+#
+	# R/S#
+	ln_RS[1] <- tot_ln_Rec[1] - ln_Sp[1];#
+	# brood-yr recruits by age#
+	for(a in 1:A) {#
+		Rec[1,a] <- max(1,tot_Rec[1] * p_vec[1,a]);#
+		}#
+	# brood years 2:(n_yrs-age_min)#
+	for(t in 2:(n_yrs-age_min+n_fore)) {#
+		# predicted recruits in BY t#
+		ln_Rkr_a[t] <- Rkr_a + c_PDO*dat_cvrs[t,1] + c_Flow*dat_cvrs[t,2] + c_Hrel*dat_cvrs[t,3];#
+		E_ln_Rec[t] <- ln_Sp[t] + ln_Rkr_a[t] - Rkr_b*Sp[t];#
+		tot_ln_Rec[t] ~ dnorm(E_ln_Rec[t] + phi*res_ln_Rec[t-1],tau_Qr);#
+		res_ln_Rec[t] <- tot_ln_Rec[t] - E_ln_Rec[t];#
+		# median of total recruits#
+		tot_Rec[t] <- exp(tot_ln_Rec[t]);#
+		# R/S#
+		ln_RS[t] <- tot_ln_Rec[t] - ln_Sp[t];#
+		# brood-yr recruits by age#
+		for(a in 1:A) {#
+			Rec[t,a] <- max(1,tot_Rec[t] * p_vec[t,a]);#
+			}#
+		} # end t loop over year#
+#
+	# get total cal yr returns for first age_min yrs#
+	for(i in 1:(age_min+age_skip)) {#
+		ln_tot_Run[i] ~ dnorm(ttl_run_mu*Rec_mu,Rec_tau/ttl_run_tau);#
+		tot_Run[i] <- exp(ln_tot_Run[i]);#
+	}#
+#
+	# get predicted calendar year returns by age#
+	# matrix Run has dim [(n_yrs-age_min) x A]#
+	# step 1: incomplete early broods#
+	# first cal yr of this grp is first brood yr + age_min + age_skip#
+	for(i in 1:(age_max-age_min-age_skip)) {#
+		# projected recruits#
+		for(a in 1:(i+age_skip)) {#
+			Run[i,a] <- Rec[(age_skip+i)-a+1,a];#
+			}#
+		# imputed recruits#
+		for(a in (i+1+age_skip):A) {#
+			lnRec[i,a] ~ dnorm(Rec_mu,Rec_tau);#
+			Run[i,a] <- exp(lnRec[i,a]);#
+			}#
+		# total run size#
+		tot_Run[i+age_min+age_skip] <- sum(Run[i,1:A]);#
+		# predicted age-prop vec for multinom#
+		for(a in 1:A) {#
+			age_v[i,a] <- Run[i,a] / tot_Run[i+age_min];#
+			}#
+		# multinomial for age comp#
+		dat_age[i,1:A] ~ dmulti(age_v[i,1:A],dat_age[i,A+1]);#
+		}#
+	# step 2: info from complete broods#
+	# first cal yr of this grp is first brood yr + age_max#
+	for(i in (A-age_skip):(n_yrs-age_min-age_skip+n_fore)) {#
+		for(a in 1:A) {#
+			Run[i,a] <- Rec[(age_skip+i)-a+1,a];#
+			}#
+		# total run size#
+		tot_Run[i+age_min+age_skip] <- sum(Run[i,1:A]);#
+		# predicted age-prop vec for multinom#
+		for(a in 1:A) {#
+			age_v[i,a] <- Run[i,a] / tot_Run[i+age_min];#
+			}#
+		# multinomial for age comp#
+		dat_age[i,1:A] ~ dmulti(age_v[i,1:A],dat_age[i,A+1]);#
+		}#
+	# get predicted calendar year spawners#
+	# first cal yr is first brood yr#
+	for(t in 1:(n_yrs+n_fore)) {#
+		# obs model for spawners#
+		ln_Sp[t] <- log(max(1,tot_Run[t] - dat_harv[t]));#
+		Sp[t] <- exp(ln_Sp[t]);#
+		ln_dat_esc[t] ~ dnorm(ln_Sp[t], tau_Rs);#
+		}#
+} # end model description#
+#
+", file=fn_jags)#
+#
+## ----JAGS_IO, message=FALSE, warning=FALSE, cache=TRUE-------------------#
+## data to pass to JAGS#
+dat_jags <- c("dat_age","ln_dat_esc","dat_harv","dat_cvrs",#
+              "n_yrs","A","age_min","age_max","age_skip","n_fore")#
+#
+## 2. model params/states for JAGS to return#
+par_jags <- c("alpha","mu_Rkr_a","Rkr_b","Sp","Rec","tot_ln_Rec","ln_RS",#
+              "c_Flow","c_PDO","c_Hrel",#
+              "var_Qr","var_Rs","p_vec","res_ln_Rec")#
+#
+## 3. MCMC control params#
+# MCMC parameters#
+mcmc_chains <- 4#
+mcmc_length <- 10e3#
+mcmc_burn <- 5e3#
+mcmc_thin <- 10#
+# total number of MCMC samples#
+mcmc_samp <- (mcmc_length-mcmc_burn)*mcmc_chains/mcmc_thin#
+#
+## function to create JAGS inits#
+init_vals <- function() {#
+	list(Rkr_a=1, c_Flow=0.1, c_PDO=-0.1, c_Hrel=-0.2,#
+	     Rkr_b=1/exp(mean(ln_dat_esc, na.rm=TRUE)),#
+	     piHD=1, muHD=rep(1,A),#
+	     p_vec=matrix(c(0.01,0.3,0.48,0.15,0.05,0.01),n_yrs-age_min+n_fore,A,byrow=TRUE),#
+	     Rec_mu=log(1000),#
+	     Rec_sig=0.1,#
+	     tot_ln_Rec=rep(log(1000),n_yrs-age_min+n_fore),#
+	     innov_1=0,#
+	     phi=0.5)#
+	}#
+#
+mod_jags <- list(data=dat_jags,#
+				 inits=init_vals,#
+				 parameters.to.save=par_jags,#
+				 model.file=fn_jags,#
+				 n.chains=as.integer(mcmc_chains),#
+				 n.iter=as.integer(mcmc_length),#
+				 n.burnin=as.integer(mcmc_burn),#
+				 n.thin=as.integer(mcmc_thin),#
+				 DIC=TRUE)#
+#
+## start timer#
+timer_start <- proc.time()#
+#
+## fit the model in JAGS & store results#
+mod_fit <- do.call(jags.parallel, mod_jags)#
+#
+## stop timer#
+(run_time_in_min <- round(((proc.time()-timer_start)/60)["elapsed"], 1))#
+#
+## ----model_diagnostics, eval=TRUE----------------------------------------#
+## Rhat values for all parameters#
+rh <- mod_fit$BUGSoutput$summary[,"Rhat"]#
+## histogram of Rhat values for all parameters#
+par(mai=c(0.9,0.9,0.3,0.1))#
+hist(rh, breaks=seq(1,ceiling(max(rh)/0.01)*0.01,by=0.01),main="",#
+     col=rgb(0,0,255,alpha=50,maxColorValue=255),border="blue3",xlab=expression(italic(R[hat])))#
+## Rhat values > threshold#
+bad_Rhat <- rh[rh>Rhat_thresh]#
+## prop of params with Rhat > threshold#
+round(length(bad_Rhat)/length(rh),2)#
+## param names#
+par_names <- sub("\\[.*","",names(bad_Rhat))#
+## number of Rhat > threshold by param name#
+table(par_names)#
+## index values for offenders#
+idx <- as.integer(sub("(^.*\\[)([0-9]{1,3})(.*)","\\2",names(bad_Rhat)))#
+## data frame of offenders#
+(df <- data.frame(par=par_names, index=idx))#
+#
+## ----tbl_summary_stats---------------------------------------------------#
+print(mod_fit$BUGSoutput$summary[c("alpha","Rkr_b","c_Flow","c_PDO","c_Hrel","var_Qr","var_Rs"),#
+                                 c("mean","sd","2.5%","50%","97.5%")],#
+      digits=3,quote=FALSE,justify="right")#
+#
+## ----plot_Ricker_a, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE----#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+par(mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))#
+RaDat <- mod_fit$BUGSoutput$sims.list$alpha#
+alphaCI <- quantile(RaDat,c(0.025,0.5,0.975))#
+hist(RaDat,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(RaDat)/0.02)*0.02,0.2),#
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")#
+aHt <- (par()$usr[4]-par()$usr[3])/10#
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")#
+#mtext("Ricker exp(a)", 1, line=3, cex=1.2)#
+mtext(expression(paste("Ricker ",alpha," ",(e^italic(a)))), 1, line=3, cex=1.2)#
+mtext("Posterior probability", 2, cex=1.2)#
+#
+## ----plot_Ricker_b, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE----#
+par(mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))#
+RbDat <- mod_fit$BUGSoutput$sims.list$Rkr_b#
+RbDat <- RbDat*10^abs(floor(log(max(RbDat),10)))#
+ylM <- max(RbDat)#
+brks <- seq(0,ceiling(ylM),0.1)#
+betaCI <- quantile(RbDat,c(0.025,0.5,0.975))#
+hist(RbDat, freq=FALSE, breaks=brks, col=clr, border="blue3",#
+	 xlab="", xaxt="n", yaxt="n",#
+	 main="", ylab="Posterior density", cex.lab=1.2)#
+axis(1, at=seq(0,3))#
+aHt <- (par()$usr[4]-par()$usr[3])/10#
+arrows(betaCI,par()$usr[3]-0.005,betaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")#
+mtext(expression(paste("Ricker ",italic(b)," ",(10^{-4}),"")), 1, line=3, cex=1.2)#
+mtext("Posterior probability", 2, cex=1.2)
+length(mod_fit$BUGSoutput$sims.list$alpha)
+min(mod_fit$BUGSoutput$sims.list$alpha)
+max(mod_fit$BUGSoutput$sims.list$alpha)
+seq(0,ceiling(max(RaDat)/0.02)*0.02,0.2)
+ceiling(max(RaDat)/0.02)*0.02
+## ----plot_Ricker_a, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE----#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+par(mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))#
+RaDat <- mod_fit$BUGSoutput$sims.list$alpha#
+alphaCI <- quantile(RaDat,c(0.025,0.5,0.975))#
+hist(RaDat,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(RaDat)/0.1)*0.1,0.2),#
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")#
+aHt <- (par()$usr[4]-par()$usr[3])/10#
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")#
+#mtext("Ricker exp(a)", 1, line=3, cex=1.2)#
+mtext(expression(paste("Ricker ",alpha," ",(e^italic(a)))), 1, line=3, cex=1.2)#
+mtext("Posterior probability", 2, cex=1.2)
+seq(0,ceiling(max(RaDat)/0.1)*0.1,0.2)
+ceiling(max(RaDat)/0.1)*0.1
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+par(mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))#
+RaDat <- mod_fit$BUGSoutput$sims.list$alpha#
+alphaCI <- quantile(RaDat,c(0.025,0.5,0.975))#
+hist(RaDat,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(RaDat)/0.1)*0.1,0.1),#
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")#
+aHt <- (par()$usr[4]-par()$usr[3])/10#
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")#
+#mtext("Ricker exp(a)", 1, line=3, cex=1.2)#
+mtext(expression(paste("Ricker ",alpha," ",(e^italic(a)))), 1, line=3, cex=1.2)#
+mtext("Posterior probability", 2, cex=1.2)
+abs(floor(log(max(RbDat),10)))
+max(RbDat)
+log(max(RbDat),10)
+floor(log(max(RbDat),10))
+## ----load_pkgs, message=FALSE, warning=FALSE-----------------------------#
+if(!require("R2jags")) {#
+  install.packages("R2jags")#
+  library("R2jags")#
+}#
+if(!require("RCurl")) {#
+  install.packages("RCurl")#
+  library("RCurl")#
+}#
+if(!require("gsl")) {#
+  install.packages("gsl")#
+  library("gsl")#
+}#
+#
+## ----real2prec-----------------------------------------------------------#
+real2prec <- function(x,map="round",prec=1) {#
+  if(prec==0) stop("\"prec\" cannot be 0")#
+    do.call(map,list(x/prec))*prec#
+}#
+#
+## ----get_user_inputs-----------------------------------------------------#
+## file with escapement data#
+## [n_yrs x 2] matrix of obs counts; 1st col is calendar yr#
+fn_esc <- "SkagitSthdEsc.csv"#
+#
+## file with age comp data#
+## [n_yrs x (1+A)]; 1st col is calendar yr#
+fn_age <- "SkagitSthdAge.csv"#
+## min & max ages#
+age_min <- 3#
+age_max <- 8#
+## years, if any, of age-comp to skip; see below#
+age_skip <- 2#
+#
+## file with catch data#
+## [n_yrs x 2] matrix of obs catch; 1st col is calendar yr#
+fn_harv <- "SkagitSthdCatch.csv"#
+#
+## file with covariate data#
+## [n_yrs x (1+MM)]; 1st col is calendar yr#
+fn_cvrs <- "SkagitEnvCov.csv"#
+#
+## number of years of forecasts#
+n_fore <- 1#
+#
+## file where to save JAGS model#
+fn_jags <- "SkagitSthd_RR_JAGS.txt"#
+#
+## upper threshold for Gelman & Rubin's (1992) potential scale reduction factor (Rhat).#
+Rhat_thresh <- 1.1#
+#
+## URL for example data files#
+## set to NULL if using a local folder/directory#
+ex_url <- "https://raw.githubusercontent.com/mdscheuerell/ASSESSOR/master/"#
+#
+## ----get_escapement_data-------------------------------------------------#
+## escapement#
+#dat_esc <- read.table(paste0(ex_url,fn_esc), header=TRUE, sep=",")#
+dat_esc <- read.csv(text = getURL(paste0(ex_url,fn_esc)))#
+## years of data#
+dat_yrs <- dat_esc$year#
+## number of years of data#
+n_yrs <- length(dat_yrs)#
+## get first & last years#
+yr_frst <- min(dat_yrs)#
+yr_last <- max(dat_yrs)#
+## log of escapement#
+ln_dat_esc <- c(log(dat_esc[,-1]),rep(NA,n_fore))#
+#
+## ----get_age_data--------------------------------------------------------#
+## age comp data#
+dat_age <- read.csv(text = getURL(paste0(ex_url,fn_age)))#
+## drop year col & first age_min+age_skip rows#
+dat_age <- dat_age[-(1:(age_min+age_skip)),-1]#
+## num of age classes#
+A <- age_max-age_min+1#
+## add row(s) of NA's for forecast years#
+dat_age <- rbind(dat_age,matrix(0,n_fore,A,dimnames=list(n_yrs+seq(n_fore),colnames(dat_age))))#
+## total num of age obs by cal yr#
+dat_age[,"sum"] <- apply(dat_age,1,sum)#
+## row indices for any years with no obs age comp#
+idx_NA_yrs <- which(dat_age$sum<A,TRUE)#
+## replace 0's in yrs w/o any obs with NA's#
+dat_age[idx_NA_yrs,(1:A)] <- NA#
+## change total in yrs w/o any obs from 0 to A to help dmulti()#
+dat_age[idx_NA_yrs,"sum"] <- A#
+## convert class#
+dat_age <- as.matrix(dat_age)#
+#
+## ----get_harvest---------------------------------------------------------#
+## harvest#
+dat_harv <- read.csv(text = getURL(paste0(ex_url,fn_harv)))#
+## drop year col & first age_max rows#
+dat_harv <- c(dat_harv[,-1],rep(0,n_fore))#
+#
+## ----get_covariates------------------------------------------------------#
+## covariate(s)#
+dat_cvrs <- read.csv(text = getURL(paste0(ex_url,fn_cvrs)))#
+## drop year col#
+dat_cvrs <- dat_cvrs[,-1]#
+## transform the covariates to z-scores#
+dat_cvrs <- scale(dat_cvrs)#
+#
+## ----SSSR_in_JAGS--------------------------------------------------------#
+cat("#
+#
+model {#
+	#--------#
+	# PRIORS#
+	#--------#
+	# alpha = intrinsic productivity#
+	Rkr_a ~ dnorm(0,1e-3)I(-4,4);#
+	alpha <- exp(Rkr_a);#
+	mu_Rkr_a <- Rkr_a + var_Qr/(2 - 2*phi^2);#
+#
+	# gamma = covariate effect#
+	c_Flow ~ dnorm(0,0.001);#
+	c_PDO ~ dnorm(0,0.001);#
+	c_Hrel ~ dnorm(0,0.001);#
+#
+	# beta = strength of dens depend#
+	Rkr_b ~ dunif(0,0.1);#
+#
+	# AR(1) param for proc errors#
+	phi ~ dunif(-0.999,0.999);#
+	# Qr = process variance for recruits model#
+	sd_Qr ~ dunif(0.001,20);#
+	tau_Qr <- pow(sd_Qr,-2);#
+	var_Qr <- pow(sd_Qr,2)#
+	# innov in yr 1#
+	innov_1 ~ dnorm(0,tau_Qr*(1-phi*phi));#
+	# Rs = variance for Sp obs model#
+	sd_Rs ~ dunif(0.001,20);#
+	tau_Rs <- pow(sd_Rs,-2);#
+	var_Rs <- pow(sd_Rs,2)#
+	# unobservable early total run size#
+	ttl_run_mu ~ dunif(1,5);#
+	ttl_run_tau ~ dunif(1,20);#
+	# unprojectable early recruits;#
+	# hyper mean across all popns#
+	Rec_mu ~ dnorm(0,0.001);#
+	# hyper SD across all popns#
+	Rec_sig ~ dunif(0,100);#
+	# precision across all popns#
+	Rec_tau <- pow(Rec_sig,-2);#
+#
+	# maturity schedule#
+	# unif vec for Dirch prior#
+	for(i in 1:A) { theta[i] <- 1 }#
+	# hyper-mean for maturity#
+	muHD ~ ddirch(theta);#
+	# hyper-prec for maturity#
+	piHD ~ dunif(0.001,1e3);#
+	for(t in 1:(n_yrs-age_min+n_fore)) { p_vec[t,1:A] ~ ddirch(muHD*piHD) }#
+	#------------#
+	# LIKELIHOOD#
+	#------------#
+	# 1st brood yr requires different innovation#
+	# predicted recruits in BY t#
+	ln_Rkr_a[1] <- Rkr_a + c_Flow*dat_cvrs[1,1] + c_PDO*dat_cvrs[1,2] + c_Hrel*dat_cvrs[1,3];#
+	E_ln_Rec[1] <- ln_Sp[1] + ln_Rkr_a[1] - Rkr_b*Sp[1];#
+	tot_ln_Rec[1] ~ dnorm(E_ln_Rec[1] + phi*innov_1,tau_Qr);#
+	res_ln_Rec[1] <- tot_ln_Rec[1] - E_ln_Rec[1];#
+	# MEDIAN of total recruits#
+	tot_Rec[1] <- exp(tot_ln_Rec[1]);#
+#
+	# R/S#
+	ln_RS[1] <- tot_ln_Rec[1] - ln_Sp[1];#
+	# brood-yr recruits by age#
+	for(a in 1:A) {#
+		Rec[1,a] <- max(1,tot_Rec[1] * p_vec[1,a]);#
+		}#
+	# brood years 2:(n_yrs-age_min)#
+	for(t in 2:(n_yrs-age_min+n_fore)) {#
+		# predicted recruits in BY t#
+		ln_Rkr_a[t] <- Rkr_a + c_PDO*dat_cvrs[t,1] + c_Flow*dat_cvrs[t,2] + c_Hrel*dat_cvrs[t,3];#
+		E_ln_Rec[t] <- ln_Sp[t] + ln_Rkr_a[t] - Rkr_b*Sp[t];#
+		tot_ln_Rec[t] ~ dnorm(E_ln_Rec[t] + phi*res_ln_Rec[t-1],tau_Qr);#
+		res_ln_Rec[t] <- tot_ln_Rec[t] - E_ln_Rec[t];#
+		# median of total recruits#
+		tot_Rec[t] <- exp(tot_ln_Rec[t]);#
+		# R/S#
+		ln_RS[t] <- tot_ln_Rec[t] - ln_Sp[t];#
+		# brood-yr recruits by age#
+		for(a in 1:A) {#
+			Rec[t,a] <- max(1,tot_Rec[t] * p_vec[t,a]);#
+			}#
+		} # end t loop over year#
+#
+	# get total cal yr returns for first age_min yrs#
+	for(i in 1:(age_min+age_skip)) {#
+		ln_tot_Run[i] ~ dnorm(ttl_run_mu*Rec_mu,Rec_tau/ttl_run_tau);#
+		tot_Run[i] <- exp(ln_tot_Run[i]);#
+	}#
+#
+	# get predicted calendar year returns by age#
+	# matrix Run has dim [(n_yrs-age_min) x A]#
+	# step 1: incomplete early broods#
+	# first cal yr of this grp is first brood yr + age_min + age_skip#
+	for(i in 1:(age_max-age_min-age_skip)) {#
+		# projected recruits#
+		for(a in 1:(i+age_skip)) {#
+			Run[i,a] <- Rec[(age_skip+i)-a+1,a];#
+			}#
+		# imputed recruits#
+		for(a in (i+1+age_skip):A) {#
+			lnRec[i,a] ~ dnorm(Rec_mu,Rec_tau);#
+			Run[i,a] <- exp(lnRec[i,a]);#
+			}#
+		# total run size#
+		tot_Run[i+age_min+age_skip] <- sum(Run[i,1:A]);#
+		# predicted age-prop vec for multinom#
+		for(a in 1:A) {#
+			age_v[i,a] <- Run[i,a] / tot_Run[i+age_min];#
+			}#
+		# multinomial for age comp#
+		dat_age[i,1:A] ~ dmulti(age_v[i,1:A],dat_age[i,A+1]);#
+		}#
+	# step 2: info from complete broods#
+	# first cal yr of this grp is first brood yr + age_max#
+	for(i in (A-age_skip):(n_yrs-age_min-age_skip+n_fore)) {#
+		for(a in 1:A) {#
+			Run[i,a] <- Rec[(age_skip+i)-a+1,a];#
+			}#
+		# total run size#
+		tot_Run[i+age_min+age_skip] <- sum(Run[i,1:A]);#
+		# predicted age-prop vec for multinom#
+		for(a in 1:A) {#
+			age_v[i,a] <- Run[i,a] / tot_Run[i+age_min];#
+			}#
+		# multinomial for age comp#
+		dat_age[i,1:A] ~ dmulti(age_v[i,1:A],dat_age[i,A+1]);#
+		}#
+	# get predicted calendar year spawners#
+	# first cal yr is first brood yr#
+	for(t in 1:(n_yrs+n_fore)) {#
+		# obs model for spawners#
+		ln_Sp[t] <- log(max(1,tot_Run[t] - dat_harv[t]));#
+		Sp[t] <- exp(ln_Sp[t]);#
+		ln_dat_esc[t] ~ dnorm(ln_Sp[t], tau_Rs);#
+		}#
+} # end model description#
+#
+", file=fn_jags)#
+#
+## ----JAGS_IO, message=FALSE, warning=FALSE, cache=TRUE-------------------#
+## data to pass to JAGS#
+dat_jags <- c("dat_age","ln_dat_esc","dat_harv","dat_cvrs",#
+              "n_yrs","A","age_min","age_max","age_skip","n_fore")#
+#
+## 2. model params/states for JAGS to return#
+par_jags <- c("alpha","mu_Rkr_a","Rkr_b","Sp","Rec","tot_ln_Rec","ln_RS",#
+              "c_Flow","c_PDO","c_Hrel",#
+              "var_Qr","var_Rs","p_vec","res_ln_Rec")#
+#
+## 3. MCMC control params#
+# MCMC parameters#
+mcmc_chains <- 4#
+mcmc_length <- 10e3#
+mcmc_burn <- 5e3#
+mcmc_thin <- 10#
+# total number of MCMC samples#
+mcmc_samp <- (mcmc_length-mcmc_burn)*mcmc_chains/mcmc_thin#
+#
+## function to create JAGS inits#
+init_vals <- function() {#
+	list(Rkr_a=1, c_Flow=0.1, c_PDO=-0.1, c_Hrel=-0.2,#
+	     Rkr_b=1/exp(mean(ln_dat_esc, na.rm=TRUE)),#
+	     piHD=1, muHD=rep(1,A),#
+	     p_vec=matrix(c(0.01,0.3,0.48,0.15,0.05,0.01),n_yrs-age_min+n_fore,A,byrow=TRUE),#
+	     Rec_mu=log(1000),#
+	     Rec_sig=0.1,#
+	     tot_ln_Rec=rep(log(1000),n_yrs-age_min+n_fore),#
+	     innov_1=0,#
+	     phi=0.5)#
+	}#
+#
+mod_jags <- list(data=dat_jags,#
+				 inits=init_vals,#
+				 parameters.to.save=par_jags,#
+				 model.file=fn_jags,#
+				 n.chains=as.integer(mcmc_chains),#
+				 n.iter=as.integer(mcmc_length),#
+				 n.burnin=as.integer(mcmc_burn),#
+				 n.thin=as.integer(mcmc_thin),#
+				 DIC=TRUE)#
+#
+## start timer#
+timer_start <- proc.time()#
+#
+## fit the model in JAGS & store results#
+mod_fit <- do.call(jags.parallel, mod_jags)#
+#
+## stop timer#
+(run_time_in_min <- round(((proc.time()-timer_start)/60)["elapsed"], 1))#
+#
+## ----model_diagnostics, eval=TRUE----------------------------------------#
+## Rhat values for all parameters#
+rh <- mod_fit$BUGSoutput$summary[,"Rhat"]#
+## histogram of Rhat values for all parameters#
+par(mai=c(0.9,0.9,0.3,0.1))#
+hist(rh, breaks=seq(1,ceiling(max(rh)/0.01)*0.01,by=0.01),main="",#
+     col=rgb(0,0,255,alpha=50,maxColorValue=255),border="blue3",xlab=expression(italic(R[hat])))#
+## Rhat values > threshold#
+bad_Rhat <- rh[rh>Rhat_thresh]#
+## prop of params with Rhat > threshold#
+round(length(bad_Rhat)/length(rh),2)#
+## param names#
+par_names <- sub("\\[.*","",names(bad_Rhat))#
+## number of Rhat > threshold by param name#
+table(par_names)#
+## index values for offenders#
+idx <- as.integer(sub("(^.*\\[)([0-9]{1,3})(.*)","\\2",names(bad_Rhat)))#
+## data frame of offenders#
+(df <- data.frame(par=par_names, index=idx))#
+#
+## ----tbl_summary_stats---------------------------------------------------#
+print(mod_fit$BUGSoutput$summary[c("alpha","Rkr_b","c_Flow","c_PDO","c_Hrel","var_Qr","var_Rs"),#
+                                 c("mean","sd","2.5%","50%","97.5%")],#
+      digits=3,quote=FALSE,justify="right")#
+#
+## ----plot_Ricker_a, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE----#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+par(mfrow=c(1,2), mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))#
+## Ricker a#
+R_a_est <- mod_fit$BUGSoutput$sims.list$Rkr_a#
+alphaCI <- quantile(R_a_est,c(0.025,0.5,0.975))#
+hist(R_a_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_a_est)/0.1)*0.1,0.1),#
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")#
+aHt <- (par()$usr[4]-par()$usr[3])/10#
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")#
+mtext(expression(paste("Ricker ",italic(a))), 1, line=3, cex=1.2)#
+mtext("Posterior probability", 2, cex=1.2)#
+## Ricker alpha#
+R_alpha_est <- mod_fit$BUGSoutput$sims.list$alpha#
+alphaCI <- quantile(R_alpha_est,c(0.025,0.5,0.975))#
+hist(R_alpha_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_alpha_est)/0.1)*0.1,0.1),#
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")#
+aHt <- (par()$usr[4]-par()$usr[3])/10#
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")#
+#mtext("Ricker exp(a)", 1, line=3, cex=1.2)#
+mtext(expression(paste("Ricker ",alpha," ",(e^italic(a)))), 1, line=3, cex=1.2)#
+mtext("Posterior probability", 2, cex=1.2)
+R_a_est
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+par(mfrow=c(1,2), mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))#
+## Ricker a#
+R_a_est <- mod_fit$BUGSoutput$sims.list$mu_Rkr_a#
+alphaCI <- quantile(R_a_est,c(0.025,0.5,0.975))#
+hist(R_a_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_a_est)/0.1)*0.1,0.1),#
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")#
+aHt <- (par()$usr[4]-par()$usr[3])/10#
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")#
+mtext(expression(paste("Ricker ",italic(a))), 1, line=3, cex=1.2)#
+mtext("Posterior probability", 2, cex=1.2)#
+## Ricker alpha#
+R_alpha_est <- mod_fit$BUGSoutput$sims.list$alpha#
+alphaCI <- quantile(R_alpha_est,c(0.025,0.5,0.975))#
+hist(R_alpha_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_alpha_est)/0.1)*0.1,0.1),#
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")#
+aHt <- (par()$usr[4]-par()$usr[3])/10#
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")#
+#mtext("Ricker exp(a)", 1, line=3, cex=1.2)#
+mtext(expression(paste("Ricker ",alpha," ",(e^italic(a)))), 1, line=3, cex=1.2)#
+mtext("Posterior probability", 2, cex=1.2)
+R_a_est
+seq(0,ceiling(max(R_a_est)/0.1)*0.1,0.1)
+max(R_a_est)
+R_a_est <- mod_fit$BUGSoutput$sims.list$mu_Rkr_a#
+alphaCI <- quantile(R_a_est,c(0.025,0.5,0.975))#
+hist(R_a_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_a_est)/0.1)*0.1,0.1),#
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")
+min(R_a_est)
+ceiling(max(R_a_est)/0.1)*0.1,0.1)
+ceiling(max(R_a_est)/0.1)*0.1
+floor(min(R_a_est)/0.1)*0.1
+par(mfrow=c(1,2), mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))#
+## Ricker a#
+R_a_est <- mod_fit$BUGSoutput$sims.list$mu_Rkr_a#
+alphaCI <- quantile(R_a_est,c(0.025,0.5,0.975))#
+brks <- seq(floor(min(R_a_est)/0.1)*0.1,ceiling(max(R_a_est)/0.1)*0.1,0.1)#
+hist(R_a_est,freq=FALSE,xlab="",main="",breaks=brks,#
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")#
+aHt <- (par()$usr[4]-par()$usr[3])/10#
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")#
+mtext(expression(paste("Ricker ",italic(a))), 1, line=3, cex=1.2)#
+mtext("Posterior probability", 2, cex=1.2)#
+## Ricker alpha#
+R_alpha_est <- mod_fit$BUGSoutput$sims.list$alpha#
+alphaCI <- quantile(R_alpha_est,c(0.025,0.5,0.975))#
+hist(R_alpha_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_alpha_est)/0.1)*0.1,0.1),#
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")#
+aHt <- (par()$usr[4]-par()$usr[3])/10#
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")#
+#mtext("Ricker exp(a)", 1, line=3, cex=1.2)#
+mtext(expression(paste("Ricker ",alpha," ",(e^italic(a)))), 1, line=3, cex=1.2)#
+mtext("Posterior probability", 2, cex=1.2)

@@ -126,20 +126,17 @@ model {
 	phi ~ dunif(-0.999,0.999);
 	
 	# Qr = process variance for recruits model
-	tau_Qr <- pow(sd_Qr,-2);
 	sd_Qr ~ dunif(0.001,20);
+	tau_Qr <- pow(sd_Qr,-2);
 	var_Qr <- pow(sd_Qr,2)
 	
 	# innov in yr 1
 	innov_1 ~ dnorm(0,tau_Qr*(1-phi*phi));
 	
 	# Rs = variance for Sp obs model
-	# diffuse gamma prior on precision
-	# tau_Rs ~ dgamma(0.001,0.001);
-	# var.R <- pow(tau_Rs,-1);
-	# unif prior on SD
-	tau_Rs <- pow(sd_Rs,-2);
 	sd_Rs ~ dunif(0.001,20);
+	tau_Rs <- pow(sd_Rs,-2);
+	var_Rs <- pow(sd_Rs,2)
 	
 	# unobservable early total run size
 	ttl_run_mu ~ dunif(1,5);
@@ -160,7 +157,7 @@ model {
 	muHD ~ ddirch(theta);
 	# hyper-prec for maturity
 	piHD ~ dunif(0.001,1e3);
-	for(t in 1:(n_yrs-age_min+n_fore)) { pi[t,1:A] ~ ddirch(muHD*piHD) }
+	for(t in 1:(n_yrs-age_min+n_fore)) { p_vec[t,1:A] ~ ddirch(muHD*piHD) }
 	
 	#------------
 	# LIKELIHOOD
@@ -179,7 +176,7 @@ model {
 		
 	# brood-yr recruits by age
 	for(a in 1:A) {
-		Rec[1,a] <- max(1,tot_Rec[1] * pi[1,a]);
+		Rec[1,a] <- max(1,tot_Rec[1] * p_vec[1,a]);
 		}
 	
 	# brood years 2:(n_yrs-age_min)
@@ -195,7 +192,7 @@ model {
 		ln_RS[t] <- tot_ln_Rec[t] - ln_Sp[t];
 		# brood-yr recruits by age
 		for(a in 1:A) {
-			Rec[t,a] <- max(1,tot_Rec[t] * pi[t,a]);
+			Rec[t,a] <- max(1,tot_Rec[t] * p_vec[t,a]);
 			}
 		} # end t loop over year
 
@@ -260,29 +257,29 @@ model {
 
 ## ----JAGS_IO, message=FALSE, warning=FALSE, cache=TRUE-------------------
 ## data to pass to JAGS
-data.JAGS <- c("dat_age","ln_dat_esc","dat_harv","dat_cvrs",
-               "n_yrs","A","age_min","age_max","age_skip","n_fore")
+dat_jags <- c("dat_age","ln_dat_esc","dat_harv","dat_cvrs",
+              "n_yrs","A","age_min","age_max","age_skip","n_fore")
 
 ## 2. model params/states for JAGS to return
-par.JAGS <- c("alpha","mu_Rkr_a","Rkr_b","Sp","Rec","tot_ln_Rec","ln_RS",
+par_jags <- c("alpha","mu_Rkr_a","Rkr_b","Sp","Rec","tot_ln_Rec","ln_RS",
               "c_Flow","c_PDO","c_Hrel",
-              "var_Qr","pi","res_ln_Rec")
+              "var_Qr","var_Rs","p_vec","res_ln_Rec")
 
 ## 3. MCMC control params
 # MCMC parameters
-mcmc.chains <- 4
-mcmc.length <- 10e5
-mcmc.burn <- 5e5
-mcmc.thin <- 1000
+mcmc_chains <- 4
+mcmc_length <- 10e3
+mcmc_burn <- 5e3
+mcmc_thin <- 10
 # total number of MCMC samples
-mcmc.samp <- (mcmc.length-mcmc.burn)*mcmc.chains/mcmc.thin
+mcmc_samp <- (mcmc_length-mcmc_burn)*mcmc_chains/mcmc_thin
 
 ## function to create JAGS inits
-init.vals <- function() {
+init_vals <- function() {
 	list(Rkr_a=1, c_Flow=0.1, c_PDO=-0.1, c_Hrel=-0.2,
 	     Rkr_b=1/exp(mean(ln_dat_esc, na.rm=TRUE)),
 	     piHD=1, muHD=rep(1,A),
-	     pi=matrix(c(0.01,0.3,0.48,0.15,0.05,0.01),n_yrs-age_min+n_fore,A,byrow=TRUE),
+	     p_vec=matrix(c(0.01,0.3,0.48,0.15,0.05,0.01),n_yrs-age_min+n_fore,A,byrow=TRUE),
 	     Rec_mu=log(1000),
 	     Rec_sig=0.1,
 	     tot_ln_Rec=rep(log(1000),n_yrs-age_min+n_fore),
@@ -290,32 +287,32 @@ init.vals <- function() {
 	     phi=0.5)
 	}
 
-mod.JAGS <- list(data=data.JAGS,
-				 inits=init.vals,
-				 parameters.to.save=par.JAGS,
+mod_jags <- list(data=dat_jags,
+				 inits=init_vals,
+				 parameters.to.save=par_jags,
 				 model.file=fn_jags,
-				 n.chains=as.integer(mcmc.chains),
-				 n.iter=as.integer(mcmc.length),
-				 n.burnin=as.integer(mcmc.burn),
-				 n.thin=as.integer(mcmc.thin),
+				 n.chains=as.integer(mcmc_chains),
+				 n.iter=as.integer(mcmc_length),
+				 n.burnin=as.integer(mcmc_burn),
+				 n.thin=as.integer(mcmc_thin),
 				 DIC=TRUE)
 
 ## start timer
 timer_start <- proc.time()
 
 ## fit the model in JAGS & store results
-mod.fit <- do.call(jags.parallel, mod.JAGS)
+mod_fit <- do.call(jags.parallel, mod_jags)
 
 ## stop timer
 (run_time_in_min <- round(((proc.time()-timer_start)/60)["elapsed"], 1))
 
-## ----model_diagnostics, cache=TRUE, eval=TRUE----------------------------
+## ----model_diagnostics, eval=TRUE----------------------------------------
 ## Rhat values for all parameters
-rh <- mod.fit$BUGSoutput$summary[,"Rhat"]
+rh <- mod_fit$BUGSoutput$summary[,"Rhat"]
 ## histogram of Rhat values for all parameters
-par(mai=c(0.9,0.9,0.1,0.1))
-hist(rh, breaks=seq(1,ceiling(max(rh)/0.01)*0.01,by=0.01),
-     xlab=expression(italic(R[hat])))
+par(mai=c(0.9,0.9,0.3,0.1))
+hist(rh, breaks=seq(1,ceiling(max(rh)/0.01)*0.01,by=0.01),main="",
+     col=rgb(0,0,255,alpha=50,maxColorValue=255),border="blue3",xlab=expression(italic(R[hat])))
 ## Rhat values > threshold
 bad_Rhat <- rh[rh>Rhat_thresh]
 ## prop of params with Rhat > threshold
@@ -329,22 +326,37 @@ idx <- as.integer(sub("(^.*\\[)([0-9]{1,3})(.*)","\\2",names(bad_Rhat)))
 ## data frame of offenders
 (df <- data.frame(par=par_names, index=idx))
 
+## ----tbl_summary_stats---------------------------------------------------
+print(mod_fit$BUGSoutput$summary[c("alpha","Rkr_b","c_Flow","c_PDO","c_Hrel","var_Qr","var_Rs"),
+                                 c("mean","sd","2.5%","50%","97.5%")],
+      digits=3,quote=FALSE,justify="right")
+
 ## ----plot_Ricker_a, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE----
 clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
-par(mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))
-RaDat <- mod.fit$BUGSoutput$sims.list$alpha
-RaDat[RaDat>10] <- 10.2
-alphaCI <- quantile(RaDat,c(0.025,0.5,0.975))
-hist(RaDat,freq=FALSE,xlab="",main="",breaks=seq(0,max(RaDat),0.2),col=clr,border="blue3",
-	 ylab="", cex.lab=1.2, yaxt="n")
+par(mfrow=c(1,2), mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))
+## Ricker a
+R_a_est <- mod_fit$BUGSoutput$sims.list$Rkr_a
+alphaCI <- quantile(R_a_est,c(0.025,0.5,0.975))
+hist(R_a_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_a_est)/0.1)*0.1,0.1),
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")
 aHt <- (par()$usr[4]-par()$usr[3])/10
 arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")
-mtext("Ricker a", 1, line=3, cex=1.2)
+mtext(expression(paste("Ricker ",italic(a))), 1, line=3, cex=1.2)
+mtext("Posterior probability", 2, cex=1.2)
+## Ricker alpha
+R_alpha_est <- mod_fit$BUGSoutput$sims.list$alpha
+alphaCI <- quantile(R_alpha_est,c(0.025,0.5,0.975))
+hist(R_alpha_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_alpha_est)/0.1)*0.1,0.1),
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")
+aHt <- (par()$usr[4]-par()$usr[3])/10
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")
+#mtext("Ricker exp(a)", 1, line=3, cex=1.2)
+mtext(expression(paste("Ricker ",alpha," ",(e^italic(a)))), 1, line=3, cex=1.2)
 mtext("Posterior probability", 2, cex=1.2)
 
 ## ----plot_Ricker_b, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE----
 par(mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))
-RbDat <- mod.fit$BUGSoutput$sims.list$Rkr_b
+RbDat <- mod_fit$BUGSoutput$sims.list$Rkr_b
 RbDat <- RbDat*10^abs(floor(log(max(RbDat),10)))
 ylM <- max(RbDat)
 brks <- seq(0,ceiling(ylM),0.1)
@@ -355,14 +367,13 @@ hist(RbDat, freq=FALSE, breaks=brks, col=clr, border="blue3",
 axis(1, at=seq(0,3))
 aHt <- (par()$usr[4]-par()$usr[3])/10
 arrows(betaCI,par()$usr[3]-0.005,betaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")
-mtext(expression(paste("Ricker b ",(10^{-4}),"")), 1, line=3, cex=1.2)
+mtext(expression(paste("Ricker ",italic(b)," ",(10^{-4}),"")), 1, line=3, cex=1.2)
 mtext("Posterior probability", 2, cex=1.2)
 
 ## ----plot_cov_effects, fig.width=6.5, fig.height=8.5, fig.pos="placeHere", warnings=FALSE, messages=FALSE, eval=TRUE----
 clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
 offSet <- 0.07
-covars <- mod.fit$BUGSoutput$sims.matrix[,grep("c_",names(mod.fit$BUGSoutput$sims.list),
-                                               value=TRUE)]
+covars <- mod_fit$BUGSoutput$sims.matrix[,grep("c_",names(mod_fit$BUGSoutput$sims.list),value=TRUE)]
 par(mfrow=c(ncol(covars),2), mai=c(0.4,0.2,0.1,0.1), omi=c(0.2,0.4,0,0))
 ylN <- floor(min(covars)*10)/10
 ylM <- ceiling(max(covars)*10)/10
@@ -376,9 +387,7 @@ for(i in 1:ncol(covars)) {
 	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),
 		 y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])
 	mtext(side=2, cov_names[i], line=3)
-	if(i==ncol(covars)) {
-		mtext(side=1,"Brood year", line=3)
-	}
+	if(i==ncol(covars)) { mtext(side=1,"Brood year", line=3) }
 	# plot covar effect
 	hist(covars[,grep(colnames(dat_cvrs)[i],colnames(covars))],
 	     freq=FALSE,breaks=brks,col=clr,border="blue3",
@@ -387,16 +396,14 @@ for(i in 1:ncol(covars)) {
 	abline(v=0, lty="dashed")
 	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),
 		 y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i+ncol(covars)])
-	if(i==ncol(covars)) {
-		mtext(side=1,"Effect size", line=3)
-	}
+	if(i==ncol(covars)) { mtext(side=1,"Effect size", line=3) }
 }
 
 ## ----plot_spawners, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE----
 CI.vec <- c(0.025,0.5,0.975)
 clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
-pDat <- apply(mod.fit$BUGSoutput$sims.list$Sp,2,sort)[,(1:n_yrs)]
-pDat <- apply(pDat,2,function(x) { x[mcmc.samp*CI.vec] })
+pDat <- apply(mod_fit$BUGSoutput$sims.list$Sp,2,sort)[,(1:n_yrs)]
+pDat <- apply(pDat,2,function(x) { x[mcmc_samp*CI.vec] })
 ypMin <- min(pDat)
 ypMax <- max(pDat)
 tSeries <- seq(yr_frst,length.out=n_yrs)
@@ -412,8 +419,8 @@ axis(2,at=c(3000,6000,12000))
 ## ----plot_run_size, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE----
 CI.vec <- c(0.025,0.5,0.975)
 clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
-pDat <- apply(mod.fit$BUGSoutput$sims.list$Sp,2,sort)
-pDat <- apply(pDat,2,function(x) { x[mcmc.samp*CI.vec] })
+pDat <- apply(mod_fit$BUGSoutput$sims.list$Sp,2,sort)
+pDat <- apply(pDat,2,function(x) { x[mcmc_samp*CI.vec] })
 pDat <- pDat + matrix(dat_harv,length(CI.vec),n_yrs+n_fore,byrow=TRUE)
 tSeries <- seq(yr_frst,length.out=n_yrs+n_fore)
 ypMin <- min(pDat)
@@ -429,14 +436,14 @@ axis(2,at=c(4000,8000,16000))
 
 ## ----plot_recruits_by_age, fig.width=6, fig.height=6, fig.pos="placeHere", eval=TRUE----
 CI.vec <- c(0.05,0.5,0.95)
-par(mfrow=c(A,1), mai=c(0.1,0.1,0.0,0.1), omi=c(0.5,0.5,0.1,0))
+par(mfrow=c(A,1), mai=c(0.1,0.1,0.05,0.1), omi=c(0.5,0.5,0.1,0))
 clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
 nRec <- n_yrs-age_min
 tSeries <- seq(yr_frst,length.out=nRec+n_fore)
 pltTT <- seq(min(round(tSeries/5,0)*5),max(round(tSeries/5,0)*5),5)
 for(i in rev(1:A)) {
-	pDat <- apply(mod.fit$BUGSoutput$sims.list$Rec[,,i],2,sort)
-	pDat <- apply(pDat,2,function(x) { x[mcmc.samp*CI.vec] })/100
+	pDat <- apply(mod_fit$BUGSoutput$sims.list$Rec[,,i],2,sort)
+	pDat <- apply(pDat,2,function(x) { x[mcmc_samp*CI.vec] })/100
 	dd <- ifelse(max(pDat)<20,1,10)
 	ypMax <- real2prec(max(pDat),prec=dd)
 	while(ypMax %% 3 != 0) { ypMax <- ypMax + dd }
@@ -456,8 +463,8 @@ mtext("Year", 1, line=2.5, outer=TRUE, cex=1.2)
 ## ----plot_total_recruits, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE----
 CI.vec <- c(0.025,0.5,0.975)
 clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
-pDat <- apply(mod.fit$BUGSoutput$sims.list$Rec,c(1,2),sum)
-pDat <- apply(apply(pDat,2,sort),2,function(x) { x[mcmc.samp*CI.vec] })
+pDat <- apply(mod_fit$BUGSoutput$sims.list$Rec,c(1,2),sum)
+pDat <- apply(apply(pDat,2,sort),2,function(x) { x[mcmc_samp*CI.vec] })
 tSeries <- seq(yr_frst,length.out=n_yrs-age_min+n_fore)
 ypMin <- min(pDat)
 ypMax <- max(pDat)
@@ -471,9 +478,9 @@ lines(tSeries, pDat[2,], col="blue3", lwd=2)
 ## ----plot_R_per_S, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE----
 CI.vec <- c(0.025,0.5,0.975)
 clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
-pDat <- apply(mod.fit$BUGSoutput$sims.list$ln_RS,2,sort)
-pDat <- apply(pDat,2,function(x) { x[mcmc.samp*CI.vec] })
-pDat[2,] <- apply(mod.fit$BUGSoutput$sims.list$ln_RS,2,median)
+pDat <- apply(mod_fit$BUGSoutput$sims.list$ln_RS,2,sort)
+pDat <- apply(pDat,2,function(x) { x[mcmc_samp*CI.vec] })
+pDat[2,] <- apply(mod_fit$BUGSoutput$sims.list$ln_RS,2,median)
 tSeries <- seq(yr_frst,length.out=n_yrs-age_min+n_fore)
 ypMin <- min(pDat)
 ypMax <- max(pDat)
@@ -487,9 +494,9 @@ lines(tSeries, pDat[2,], col="blue3", lwd=2)
 ## ----plot_innovations, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE----
 CI.vec <- c(0.025,0.5,0.975)
 clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
-pDat <- apply(mod.fit$BUGSoutput$sims.list$res_ln_Rec,2,sort)
-pDat <- apply(pDat,2,function(x) { x[mcmc.samp*CI.vec] })
-pDat[2,] <- apply(mod.fit$BUGSoutput$sims.list$res_ln_Rec,2,median)
+pDat <- apply(mod_fit$BUGSoutput$sims.list$res_ln_Rec,2,sort)
+pDat <- apply(pDat,2,function(x) { x[mcmc_samp*CI.vec] })
+pDat[2,] <- apply(mod_fit$BUGSoutput$sims.list$res_ln_Rec,2,median)
 tSeries <- seq(yr_frst,length.out=n_yrs-age_min+n_fore)
 ypMin <- min(pDat)
 ypMax <- max(pDat)
@@ -505,9 +512,9 @@ par(mai=c(0.8,0.8,0.1,0.1), omi=c(0,0.1,0.2,0.2))
 CI.vec <- c(0.025,0.5,0.975)
 tSeries <- seq(yr_frst,length.out=n_yrs-age_min+n_fore)
 clr <- rgb(0, 0, 255, alpha = 40, maxColorValue = 255)
-ageComp <- t(apply(apply(mod.fit$BUGSoutput$sims.list$pi,c(3,2),mean),2,cumsum))
+ageComp <- t(apply(apply(mod_fit$BUGSoutput$sims.list$p_vec,c(3,2),mean),2,cumsum))
 plot(tSeries, rep(1,nRec+n_fore), ylab="Proportion", xlab="Brood year", ylim=c(0,1), las=1,
-		xaxs="i", yaxs="i", type="n", lty="solid", col="blue3", cex.lab=1.2)
+     xaxs="i", yaxs="i", type="n", lty="solid", col="blue3", cex.lab=1.2)
 for(i in c(1,2,3,4,6)) {
 	polygon(c(tSeries,rev(tSeries)),c(ageComp[,i],rep(0,nRec+n_fore)), col=clr, border=NA)
 	}
@@ -518,21 +525,21 @@ text(par()$usr[2],lbl[5],"7&8", xpd=NA, pos=4, offset=0.15, col="black", cex=0.7
 
 ## ----plot_SR, fig.width=6, fig.height=5, fig.pos="placeHere", eval=TRUE----
 CI.vec <- c(0.025,0.5,0.975)
-MC <- 100
-idx <- sample(seq(mcmc.samp),MC)
-sDat <- apply(mod.fit$BUGSoutput$sims.list$Sp,2,sort)
-sDat <- apply(sDat,2,function(x) { x[mcmc.samp*CI.vec] })
-sDat[2,] <- apply(mod.fit$BUGSoutput$sims.list$Sp,2,median)
+MC <- 200
+idx <- sample(seq(mcmc_samp),MC)
+sDat <- apply(mod_fit$BUGSoutput$sims.list$Sp,2,sort)
+sDat <- apply(sDat,2,function(x) { x[mcmc_samp*CI.vec] })
+sDat[2,] <- apply(mod_fit$BUGSoutput$sims.list$Sp,2,median)
 sDat <- sDat[,1:(n_yrs-age_min+n_fore)]
-rDat <- apply(mod.fit$BUGSoutput$sims.list$tot_ln_Rec,2,sort)
-rDat <- apply(rDat,2,function(x) { x[mcmc.samp*CI.vec] })
+rDat <- apply(mod_fit$BUGSoutput$sims.list$tot_ln_Rec,2,sort)
+rDat <- apply(rDat,2,function(x) { x[mcmc_samp*CI.vec] })
 rDat <- exp(rDat)
 dd <- 3000
 yM <- real2prec(max(rDat),"ceiling",dd)
 yM <- 30000
 xM <- real2prec(max(sDat),"ceiling",dd)
-aa <- matrix(mod.fit$BUGSoutput$sims.array[,,"alpha"],ncol=1)
-bb <- matrix(mod.fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)
+aa <- exp(matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1))
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)
 par(mai=c(0.8,0.8,0.1,0.1), omi=c(0,0.1,0.1,0.2))
 plot(sDat[2,],rDat[2,], xlim=c(0,xM), ylim=c(0,yM), pch=16, col="blue3", type="n",
 	 xaxs="i", yaxs="i", ylab="Recruits (1000s)", xlab="Spawners (1000s)", cex.lab=1.2,
@@ -550,7 +557,7 @@ clr <- rgb(100, 0, 200, alpha = seq(200,100,length.out=age_max-age_min+n_fore), 
 segments(sDat[2,(nCB+1):nTB],rDat[1,(nCB+1):nTB],sDat[2,(nCB+1):nTB],rDat[3,(nCB+1):nTB], col=clr)
 segments(sDat[1,(nCB+1):nTB],rDat[2,(nCB+1):nTB],sDat[3,(nCB+1):nTB],rDat[2,(nCB+1):nTB], col=clr)
 points(sDat[2,(nCB+1):nTB],rDat[2,(nCB+1):nTB],
-		xlim=c(0,xM), ylim=c(0,yM), pch=16, col=clr)
+       xlim=c(0,xM), ylim=c(0,yM), pch=16, col=clr)
 
 ## ----ref_pts, eval=TRUE--------------------------------------------------
 # abbreviations for ref points
@@ -558,8 +565,8 @@ refNames <- c("Smsy","Umsy","MSY","Umax","MSR","Smsr","Seq")
 # proportions of MSY to consider
 yieldProps <- c(0.7,0.8,0.9)
 propNames <- paste("OYP",yieldProps,sep="")
-lnA <- matrix(mod.fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)
-bb <- matrix(mod.fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)
 mcmc <- length(lnA)
 # empty matrix for ref pts
 ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))

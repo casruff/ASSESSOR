@@ -15,16 +15,24 @@ output:
 
 ## Contributors
 [__Mark D. Scheuerell__](https://faculty.washington.edu/scheuerl/)  
-_Fish Ecology Division, Northwest Fisheries Science Center, National Marine Fisheries Service, National Oceanic and Atmospheric Administration, Seattle, WA 98112 USA, mark.scheuerell@noaa.gov_
+_Fish Ecology Division, Northwest Fisheries Science Center, National Marine Fisheries Service, National Oceanic and Atmospheric Administration, Seattle, WA USA, mark.scheuerell@noaa.gov_
 
 __Casey P. Ruff__  
-_Skagit River System Cooperative, Mt. Vernon, WA, cruff@skagitcoop.org_
+_Skagit River System Cooperative, Mt. Vernon, WA USA, cruff@skagitcoop.org_
 
 __Joseph H. Anderson__  
 _Washington Department of Fish and Wildlife, Olympia, WA USA, joseph.anderson@dfw.wa.gov_
 
 __Eric M. Beamer__   
-_Skagit River System Cooperative, Mt. Vernon, WA, ebeamer@skagitcoop.org_
+_Skagit River System Cooperative, Mt. Vernon, WA USA, ebeamer@skagitcoop.org_
+
+### Acknowledgments
+
+__Eric R. Buhle__  
+_Ocean Associates, Northwest Fisheries Science Center, National Marine Fisheries Service, National Oceanic and Atmospheric Administration, Seattle, WA USA, eric.buhle@noaa.gov_
+
+[__James T. Thorson__](https://sites.google.com/site/thorsonresearch/)  
+_Fishery Resource Analysis and Monitoring Division, Northwest Fisheries Science Center, National Marine Fisheries Service, National Oceanic and Atmospheric Administration, Seattle, WA USA, james.thorson@noaa.gov_
 
 ## Overview
 ASSESSOR incorporates data on spawners (escapement), harvest, and age composition into a retrospective run reconstruction and probabilistic forecast under a Bayesian framework. The general structure follows that of Fleischman _et al._ (2013), but it also allows for the inclusion of specific external drivers of productivity, both natural (e.g., climate variability) and anthropogenic (e.g., flow alteration). The model is composed of two primary pieces: a process model that governs the true population dynamics, and an observation model that relates the data in hand to the true process.
@@ -96,7 +104,7 @@ if(!require("gsl")) {
 }
 ```
 
-The last thing we'll need is the following function for trimming real numbers to a desired precision in the plots.
+The last thing we'll need is the following function for trimming real numbers to a desired precision when plotting output.
 
 ```{r real2prec}
 real2prec <- function(x,map="round",prec=1) {
@@ -278,7 +286,7 @@ model {
 	muHD ~ ddirch(theta);
 	# hyper-prec for maturity
 	piHD ~ dunif(0.001,1e3);
-	for(t in 1:(n_yrs-age_min+n_fore)) { pi[t,1:A] ~ ddirch(muHD*piHD) }
+	for(t in 1:(n_yrs-age_min+n_fore)) { p_vec[t,1:A] ~ ddirch(muHD*piHD) }
 	
 	#------------
 	# LIKELIHOOD
@@ -297,13 +305,13 @@ model {
 		
 	# brood-yr recruits by age
 	for(a in 1:A) {
-		Rec[1,a] <- max(1,tot_Rec[1] * pi[1,a]);
+		Rec[1,a] <- max(1,tot_Rec[1] * p_vec[1,a]);
 		}
 	
 	# brood years 2:(n_yrs-age_min)
 	for(t in 2:(n_yrs-age_min+n_fore)) {
 		# predicted recruits in BY t
-		ln_Rkr_a[t] <- Rkr_a + c_PDO*dat_cvrs[t,1] + c_Flow*dat_cvrs[t,2] + c_Hrel*dat_cvrs[t,3];
+		ln_Rkr_a[t] <- Rkr_a + c_Flow*dat_cvrs[t,1] + c_PDO*dat_cvrs[t,2] + c_Hrel*dat_cvrs[t,3];
 		E_ln_Rec[t] <- ln_Sp[t] + ln_Rkr_a[t] - Rkr_b*Sp[t];
 		tot_ln_Rec[t] ~ dnorm(E_ln_Rec[t] + phi*res_ln_Rec[t-1],tau_Qr);
 		res_ln_Rec[t] <- tot_ln_Rec[t] - E_ln_Rec[t];
@@ -313,7 +321,7 @@ model {
 		ln_RS[t] <- tot_ln_Rec[t] - ln_Sp[t];
 		# brood-yr recruits by age
 		for(a in 1:A) {
-			Rec[t,a] <- max(1,tot_Rec[t] * pi[t,a]);
+			Rec[t,a] <- max(1,tot_Rec[t] * p_vec[t,a]);
 			}
 		} # end t loop over year
 
@@ -396,7 +404,7 @@ dat_jags <- c("dat_age","ln_dat_esc","dat_harv","dat_cvrs",
 ## 2. model params/states for JAGS to return
 par_jags <- c("alpha","mu_Rkr_a","Rkr_b","Sp","Rec","tot_ln_Rec","ln_RS",
               "c_Flow","c_PDO","c_Hrel",
-              "var_Qr","var_Rs","pi","res_ln_Rec")
+              "var_Qr","var_Rs","p_vec","res_ln_Rec")
 
 ## 3. MCMC control params
 # MCMC parameters
@@ -412,7 +420,7 @@ init_vals <- function() {
 	list(Rkr_a=1, c_Flow=0.1, c_PDO=-0.1, c_Hrel=-0.2,
 	     Rkr_b=1/exp(mean(ln_dat_esc, na.rm=TRUE)),
 	     piHD=1, muHD=rep(1,A),
-	     pi=matrix(c(0.01,0.3,0.48,0.15,0.05,0.01),n_yrs-age_min+n_fore,A,byrow=TRUE),
+	     p_vec=matrix(c(0.01,0.3,0.48,0.15,0.05,0.01),n_yrs-age_min+n_fore,A,byrow=TRUE),
 	     Rec_mu=log(1000),
 	     Rec_sig=0.1,
 	     tot_ln_Rec=rep(log(1000),n_yrs-age_min+n_fore),
@@ -465,13 +473,15 @@ idx <- as.integer(sub("(^.*\\[)([0-9]{1,3})(.*)","\\2",names(bad_Rhat)))
 (df <- data.frame(par=par_names, index=idx))
 ```
 
-The convergence statistics indicate that some of the elements of the in the estimated proportions of the youngest and oldest age classes (i.e., 3 and 8, respectively) did not converge to our desired threshold. However, there is very little data to inform those parameters, so we should not be too concerned.
+The convergence statistics indicate that some of the elements in $p$ the estimated proportions of the youngest and oldest age classes (i.e., 3 and 8, respectively) did not converge to our desired threshold. However, there is very little data to inform those parameters, so we should not be too concerned.
 
 ## Results
 
 Here is a table that summarizes the median and 95% credible interval for some of the model parameters
 ```{r tbl_summary_stats}
-print(mod_fit$BUGSoutput$summary[c("alpha","Rkr_b","c_Flow","c_PDO","c_Hrel","var_Qr","var_Rs"),
+print(mod_fit$BUGSoutput$summary[c("mu_Rkr_a","alpha","Rkr_b",
+                                   "c_Flow","c_PDO","c_Hrel",
+                                   "var_Qr","var_Rs"),
                                  c("mean","sd","2.5%","50%","97.5%")],
       digits=3,quote=FALSE,justify="right")
 ```
@@ -479,15 +489,25 @@ print(mod_fit$BUGSoutput$summary[c("alpha","Rkr_b","c_Flow","c_PDO","c_Hrel","va
 
 ### Ricker _a_
 
-Here is a histogram of the the mean instrinsic productivity (i.e., the slope of the curve near the origin). Vertical arrows under the x-axis indicate the 2.5^th^, 50^th^, and 97.5^th^ percentiles.
+Here are histograms of the Ricker $a$ (left) and Ricker $\alpha = \exp{\alpha}$ (right) parameters. Vertical arrows under the x-axes indicate the 2.5^th^, 50^th^, and 97.5^th^ percentiles.
 
-```{r plot_Ricker_a, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE}
+```{r plot_Ricker_a, fig.width=8, fig.height=4, fig.pos="placeHere", eval=TRUE}
 clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
-par(mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))
-RaDat <- mod_fit$BUGSoutput$sims.list$alpha
-RaDat[RaDat>10] <- 10.2
-alphaCI <- quantile(RaDat,c(0.025,0.5,0.975))
-hist(RaDat,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(RaDat)/0.02)*0.02,0.2),
+par(mfrow=c(1,2), mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))
+## Ricker a
+R_a_est <- mod_fit$BUGSoutput$sims.list$mu_Rkr_a
+alphaCI <- quantile(R_a_est,c(0.025,0.5,0.975))
+brks <- seq(floor(min(R_a_est)/0.1)*0.1,ceiling(max(R_a_est)/0.1)*0.1,0.1)
+hist(R_a_est,freq=FALSE,xlab="",main="",breaks=brks,
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")
+aHt <- (par()$usr[4]-par()$usr[3])/10
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")
+mtext(expression(paste("Ricker ",italic(a))), 1, line=3, cex=1.2)
+mtext("Posterior probability", 2, cex=1.2)
+## Ricker alpha
+R_alpha_est <- mod_fit$BUGSoutput$sims.list$alpha
+alphaCI <- quantile(R_alpha_est,c(0.025,0.5,0.975))
+hist(R_alpha_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_alpha_est)/0.1)*0.1,0.1),
      col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")
 aHt <- (par()$usr[4]-par()$usr[3])/10
 arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")
@@ -698,7 +718,7 @@ par(mai=c(0.8,0.8,0.1,0.1), omi=c(0,0.1,0.2,0.2))
 CI.vec <- c(0.025,0.5,0.975)
 tSeries <- seq(yr_frst,length.out=n_yrs-age_min+n_fore)
 clr <- rgb(0, 0, 255, alpha = 40, maxColorValue = 255)
-ageComp <- t(apply(apply(mod_fit$BUGSoutput$sims.list$pi,c(3,2),mean),2,cumsum))
+ageComp <- t(apply(apply(mod_fit$BUGSoutput$sims.list$p_vec,c(3,2),mean),2,cumsum))
 plot(tSeries, rep(1,nRec+n_fore), ylab="Proportion", xlab="Brood year", ylim=c(0,1), las=1,
      xaxs="i", yaxs="i", type="n", lty="solid", col="blue3", cex.lab=1.2)
 for(i in c(1,2,3,4,6)) {

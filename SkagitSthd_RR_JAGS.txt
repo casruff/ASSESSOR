@@ -53,7 +53,7 @@ model {
 	muHD ~ ddirch(theta);
 	# hyper-prec for maturity
 	piHD ~ dunif(0.001,1e3);
-	for(t in 1:(n_yrs-age_min+n_fore)) { pi[t,1:A] ~ ddirch(muHD*piHD) }
+	for(t in 1:(n_yrs-age_min+n_fore)) { p_vec[t,1:A] ~ ddirch(muHD*piHD) }
 	
 	#------------
 	# LIKELIHOOD
@@ -72,7 +72,7 @@ model {
 		
 	# brood-yr recruits by age
 	for(a in 1:A) {
-		Rec[1,a] <- max(1,tot_Rec[1] * pi[1,a]);
+		Rec[1,a] <- max(1,tot_Rec[1] * p_vec[1,a]);
 		}
 	
 	# brood years 2:(n_yrs-age_min)
@@ -88,7 +88,7 @@ model {
 		ln_RS[t] <- tot_ln_Rec[t] - ln_Sp[t];
 		# brood-yr recruits by age
 		for(a in 1:A) {
-			Rec[t,a] <- max(1,tot_Rec[t] * pi[t,a]);
+			Rec[t,a] <- max(1,tot_Rec[t] * p_vec[t,a]);
 			}
 		} # end t loop over year
 
