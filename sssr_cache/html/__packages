@@ -1,0 +1,18 @@
+base
+coda
+rjags
+R2jags
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+bitops
+RCurl
+gsl
+>>>>>>> master
+=======
+bitops
+RCurl
+gsl
+=======
+>>>>>>> gh-pages
+>>>>>>> master
