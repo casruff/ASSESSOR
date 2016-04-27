@@ -100,8 +100,8 @@ The last thing we'll need is the following function for trimming real numbers to
 
 ```r
 real2prec <- function(x,map="round",prec=1) {
-  if(prec==0) stop("\"prec\" cannot be 0")
-    do.call(map,list(x/prec))*prec
+  if(prec==0) { stop("\"prec\" cannot be 0") }
+  do.call(map,list(x/prec))*prec
 }
 ```
 
@@ -653,14 +653,14 @@ brks <- seq(ylN,ylM,length.out=diff(c(ylN,ylM))*40+1)
 cov_names <- c("Flow","PDO","H releases")
 tSeries <- seq(yr_frst,length.out=n_yrs-age_min)
 for(i in 1:ncol(covars)) {
-	# plot covar ts
+	## plot covar ts
 	plot(tSeries, dat_cvrs[seq(length(tSeries)),i], xlab="", ylab="",
 		 main="", cex.lab=1.3, pch=16, col="blue3", type="o")
 	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),
 		 y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])
 	mtext(side=2, cov_names[i], line=3)
 	if(i==ncol(covars)) { mtext(side=1,"Brood year", line=3) }
-	# plot covar effect
+	## plot covar effect
 	hist(covars[,grep(colnames(dat_cvrs)[i],colnames(covars))],
 	     freq=FALSE,breaks=brks,col=clr,border="blue3",
 		 xlab="", yaxt="n",
