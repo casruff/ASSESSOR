@@ -10,7 +10,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
 
-<meta name="date" content="2016-04-28" />
 
 <title>ASSESSOR: An age-structured state-space stock-recruit model for Pacific salmon</title>
 
@@ -199,14 +198,13 @@ div.tocify {
 
 
 <h1 class="title">ASSESSOR: An age-structured state-space stock-recruit model for Pacific salmon</h1>
-<h4 class="date"><em>2016-04-28</em></h4>
 
 </div>
 
 
 <hr />
-<div id="contributors" class="section level2">
-<h2>Contributors</h2>
+<div id="contributors" class="section level3">
+<h3>Contributors</h3>
 <p><a href="https://faculty.washington.edu/scheuerl/"><strong>Mark D. Scheuerell</strong></a><br />
 <em>Fish Ecology Division, Northwest Fisheries Science Center, National Marine Fisheries Service, National Oceanic and Atmospheric Administration, Seattle, WA USA, <a href="mailto:mark.scheuerell@noaa.gov">mark.scheuerell@noaa.gov</a></em></p>
 <p><strong>Casey P. Ruff</strong><br />
@@ -215,14 +213,18 @@ div.tocify {
 <em>Washington Department of Fish and Wildlife, Olympia, WA USA, <a href="mailto:joseph.anderson@dfw.wa.gov">joseph.anderson@dfw.wa.gov</a></em></p>
 <p><strong>Eric M. Beamer</strong><br />
 <em>Skagit River System Cooperative, Mt. Vernon, WA USA, <a href="mailto:ebeamer@skagitcoop.org">ebeamer@skagitcoop.org</a></em></p>
+</div>
 <div id="acknowledgments" class="section level3">
 <h3>Acknowledgments</h3>
 <p><strong>Eric R. Buhle</strong><br />
 <em>Ocean Associates, Northwest Fisheries Science Center, National Marine Fisheries Service, National Oceanic and Atmospheric Administration, Seattle, WA USA, <a href="mailto:eric.buhle@noaa.gov">eric.buhle@noaa.gov</a></em></p>
 <p><a href="https://sites.google.com/site/thorsonresearch/"><strong>James T. Thorson</strong></a><br />
 <em>Fishery Resource Analysis and Monitoring Division, Northwest Fisheries Science Center, National Marine Fisheries Service, National Oceanic and Atmospheric Administration, Seattle, WA USA, <a href="mailto:james.thorson@noaa.gov">james.thorson@noaa.gov</a></em></p>
-<hr />
 </div>
+<div id="version" class="section level3">
+<h3>Version</h3>
+<p>This is version 0.16.04.28.</p>
+<hr />
 </div>
 <div id="overview" class="section level2">
 <h2>Overview</h2>
@@ -259,7 +261,7 @@ div.tocify {
 <div id="requirements" class="section level2">
 <h2>Requirements</h2>
 <p>ASSESSOR requires the <a href="https://cran.r-project.org/">R software</a> (v3.2.3) for data retrieval, data processing, and summarizing model results, and the <a href="http://mcmc-jags.sourceforge.net/">JAGS software</a> (v4.2.0) for Markov chain Monte Carlo (MCMC) simulation. Please note that some of the R code below may not work with older versions of JAGS due to some changes in the ways that arrays are handled.</p>
-<p>We also need the <code>R2jags</code> and <code>gsl</code> packages, which are not included with base <code>R</code>, so we begin by installing them (if necessary) and then loading them.</p>
+<p>We also need a few packages that are not included with base <code>R</code>, so we begin by installing them (if necessary) and then loading them.</p>
 <pre class="r"><code>if(!require(&quot;R2jags&quot;)) {
   install.packages(&quot;R2jags&quot;)
   library(&quot;R2jags&quot;)
