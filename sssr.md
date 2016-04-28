@@ -108,10 +108,10 @@ real2prec <- function(x,map="round",prec=1) {
 ## User inputs
 We begin by specifying the names of four necessary data files that contain the following information:
  
- 1. estimated total number of adult spawners (escapement) by year;
- 2. estimated age composition of adult spawners by year;
- 3. estimated total harvest by year;
- 4. covariate(s) by year.
+ 1. observed total number of adult spawners (escapement) by year;
+ 2. observed age composition of adult spawners by year;
+ 3. observed total harvest by year;
+ 4. measured covariate(s) by year.
 
 Let's also define the following parameters, which will be referenced throughout the analysis.
 
@@ -395,6 +395,8 @@ The last thing we need to do before fitting the model in JAGS is to specify:
 Please note that the following code takes ~20 min to run on a quad-core machine with 3.5 GHz Intel Core i7 processors.
 
 
+
+
 ```r
 ## data to pass to JAGS
 dat_jags <- c("dat_age","ln_dat_esc","dat_harv","dat_cvrs",
@@ -408,15 +410,15 @@ par_jags <- c("alpha","mu_Rkr_a","Rkr_b","Sp","Rec","tot_ln_Rec","ln_RS",
 ## 3. MCMC control params
 # MCMC parameters
 mcmc_chains <- 4
-mcmc_length <- 10e4
-mcmc_burn <- 5e4
-mcmc_thin <- 100
+mcmc_length <- 10e5
+mcmc_burn <- 5e5
+mcmc_thin <- 1000
 # total number of MCMC samples
 mcmc_samp <- (mcmc_length-mcmc_burn)*mcmc_chains/mcmc_thin
 
 ## function to create JAGS inits
 init_vals <- function() {
-	list(Rkr_a=1, c_Flow=0.1, c_PDO=-0.1, c_Hrel=-0.2,
+	list(Rkr_a=1, c_Flow=0, c_PDO=0, c_Hrel=0,
 	     Rkr_b=1/exp(mean(ln_dat_esc, na.rm=TRUE)),
 	     piHD=1, muHD=rep(1,A),
 	     p_vec=matrix(c(0.01,0.3,0.48,0.15,0.05,0.01),n_yrs-age_min+n_fore,A,byrow=TRUE),
@@ -437,20 +439,11 @@ mod_jags <- list(data=dat_jags,
 				 n.thin=as.integer(mcmc_thin),
 				 DIC=TRUE)
 
-## start timer
-timer_start <- proc.time()
-
 ## fit the model in JAGS & store results
 mod_fit <- do.call(jags.parallel, mod_jags)
-
-## stop timer
-(run_time_in_min <- round(((proc.time()-timer_start)/60)["elapsed"], 1))
 ```
 
-```
-## elapsed 
-##       4
-```
+
 
 ## Model diagnostics
 
@@ -476,7 +469,7 @@ round(length(bad_Rhat)/length(rh),2)
 ```
 
 ```
-## [1] 0.09
+## [1] 0.03
 ```
 
 ```r
@@ -488,8 +481,8 @@ table(par_names)
 
 ```
 ## par_names
-## p_vec   Rec 
-##    31    20
+## p_vec 
+##    17
 ```
 
 ```r
@@ -501,64 +494,31 @@ idx <- as.integer(sub("(^.*\\[)([0-9]{1,3})(.*)","\\2",names(bad_Rhat)))
 
 ```
 ##      par index
-## 1    Rec     1
-## 2    Rec     3
-## 3    Rec     4
-## 4    Rec     7
-## 5    Rec     9
-## 6    Rec    10
-## 7    Rec    11
-## 8    Rec    12
-## 9    Rec    15
-## 10   Rec    16
-## 11   Rec    17
-## 12   Rec    20
-## 13   Rec    21
-## 14   Rec    22
-## 15   Rec    23
-## 16   Rec    25
-## 17   Rec    29
-## 18   Rec    31
-## 19   Rec    32
-## 20   Rec    34
-## 21 p_vec     3
-## 22 p_vec    18
-## 23 p_vec    22
-## 24 p_vec     1
-## 25 p_vec     3
-## 26 p_vec     4
-## 27 p_vec     5
-## 28 p_vec     6
-## 29 p_vec     7
-## 30 p_vec     9
-## 31 p_vec    10
-## 32 p_vec    11
-## 33 p_vec    12
-## 34 p_vec    14
-## 35 p_vec    15
-## 36 p_vec    16
-## 37 p_vec    17
-## 38 p_vec    20
-## 39 p_vec    21
-## 40 p_vec    22
-## 41 p_vec    23
-## 42 p_vec    25
-## 43 p_vec    26
-## 44 p_vec    27
-## 45 p_vec    29
-## 46 p_vec    30
-## 47 p_vec    31
-## 48 p_vec    32
-## 49 p_vec    34
-## 50 p_vec    35
-## 51 p_vec    36
+## 1  p_vec     2
+## 2  p_vec     3
+## 3  p_vec     6
+## 4  p_vec     7
+## 5  p_vec    12
+## 6  p_vec    15
+## 7  p_vec    17
+## 8  p_vec    18
+## 9  p_vec    19
+## 10 p_vec    20
+## 11 p_vec    21
+## 12 p_vec    23
+## 13 p_vec    24
+## 14 p_vec    26
+## 15 p_vec    29
+## 16 p_vec    32
+## 17 p_vec    33
 ```
 
 The convergence statistics indicate that some of the elements in $p$ the estimated proportions of the youngest and oldest age classes (i.e., 3 and 8, respectively) did not converge to our desired threshold. However, there is very little data to inform those parameters, so we should not be too concerned.
 
 ## Results
 
-Here is a table that summarizes the median and 95% credible interval for some of the model parameters
+Here is a table that summarizes the median and 95% credible interval for some of the model parameters.
+
 
 ```r
 print(mod_fit$BUGSoutput$summary[c("mu_Rkr_a","alpha","Rkr_b",
@@ -569,21 +529,22 @@ print(mod_fit$BUGSoutput$summary[c("mu_Rkr_a","alpha","Rkr_b",
 ```
 
 ```
-##              mean       sd      2.5%       50%     97.5%
-## mu_Rkr_a  1.23419 2.69e-01  7.17e-01  1.239043  1.716435
-## alpha     3.32706 8.82e-01  1.88e+00  3.254708  5.162843
-## Rkr_b     0.00014 3.46e-05  6.91e-05  0.000141  0.000205
-## c_Flow   -0.17016 7.02e-02 -3.09e-01 -0.169212 -0.037487
-## c_PDO     0.10348 7.78e-02 -5.59e-02  0.107107  0.244819
-## c_Hrel   -0.27353 1.12e-01 -4.65e-01 -0.285162 -0.019396
-## var_Qr    0.09510 3.71e-02  4.39e-02  0.088995  0.188168
-## var_Rs    0.02244 2.27e-02  2.37e-04  0.016036  0.080266
+##               mean       sd      2.5%       50%     97.5%
+## mu_Rkr_a  1.239865 2.93e-01  6.91e-01  1.244175  1.706699
+## alpha     3.345830 9.80e-01  1.82e+00  3.278258  5.134761
+## Rkr_b     0.000141 3.43e-05  6.99e-05  0.000143  0.000202
+## c_Flow   -0.174193 7.04e-02 -3.15e-01 -0.174611 -0.035560
+## c_PDO     0.106493 7.38e-02 -5.21e-02  0.109664  0.243990
+## c_Hrel   -0.277020 1.08e-01 -4.60e-01 -0.289274 -0.028317
+## var_Qr    0.094688 3.54e-02  4.33e-02  0.088710  0.180815
+## var_Rs    0.021849 2.24e-02  4.70e-05  0.015965  0.077751
 ```
 
+Here are a series of figures summarizing model output.
 
 ### Ricker _a_
 
-Here are histograms of the Ricker $a$ (left) and Ricker $\alpha = \exp{\alpha}$ (right) parameters. Vertical arrows under the x-axes indicate the 2.5^th^, 50^th^, and 97.5^th^ percentiles.
+Here are histograms of the posterior samples for the mean Ricker $a$ (left) and $\alpha = \exp{\alpha}$ (right) parameters. Note that for plotting purposes only, the density in the largest bin for each parameter contains counts for all values greater or equal to that. Vertical arrows under the x-axes indicate the 2.5^th^, 50^th^, and 97.5^th^ percentiles.
 
 
 ```r
@@ -591,21 +552,26 @@ clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
 par(mfrow=c(1,2), mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))
 ## Ricker a
 R_a_est <- mod_fit$BUGSoutput$sims.list$mu_Rkr_a
+R_a_est[R_a_est>3] <- 3
 alphaCI <- quantile(R_a_est,c(0.025,0.5,0.975))
 brks <- seq(floor(min(R_a_est)/0.1)*0.1,ceiling(max(R_a_est)/0.1)*0.1,0.1)
 hist(R_a_est,freq=FALSE,xlab="",main="",breaks=brks,
      col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")
-aHt <- (par()$usr[4]-par()$usr[3])/10
-arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")
+aHt <- (par()$usr[4]-par()$usr[3])/20
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,
+       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)
 mtext(expression(paste("Ricker ",italic(a))), 1, line=3, cex=1.2)
 mtext("Posterior probability", 2, cex=1.2)
 ## Ricker alpha
-R_alpha_est <- mod_fit$BUGSoutput$sims.list$alpha
+#R_alpha_est <- mod_fit$BUGSoutput$sims.list$alpha
+R_alpha_est <- exp(R_a_est)
+R_alpha_est[R_alpha_est>9] <- 9
 alphaCI <- quantile(R_alpha_est,c(0.025,0.5,0.975))
-hist(R_alpha_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_alpha_est)/0.2)*0.2,0.2),
+hist(R_alpha_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_alpha_est)/0.3)*0.3,0.3),
      col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")
-aHt <- (par()$usr[4]-par()$usr[3])/10
-arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")
+aHt <- (par()$usr[4]-par()$usr[3])/20
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,
+       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)
 #mtext("Ricker exp(a)", 1, line=3, cex=1.2)
 mtext(expression(paste("Ricker ",alpha," ",(e^italic(a)))), 1, line=3, cex=1.2)
 mtext("Posterior probability", 2, cex=1.2)
@@ -623,14 +589,15 @@ par(mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))
 RbDat <- mod_fit$BUGSoutput$sims.list$Rkr_b
 RbDat <- RbDat*10^abs(floor(log(max(RbDat),10)))
 ylM <- max(RbDat)
-brks <- seq(0,ceiling(ylM),0.05)
+brks <- seq(0,ceiling(ylM),0.1)
 betaCI <- quantile(RbDat,c(0.025,0.5,0.975))
 hist(RbDat, freq=FALSE, breaks=brks, col=clr, border="blue3",
 	 xlab="", xaxt="n", yaxt="n",
 	 main="", ylab="Posterior density", cex.lab=1.2)
 axis(1, at=seq(0,3))
-aHt <- (par()$usr[4]-par()$usr[3])/10
-arrows(betaCI,par()$usr[3]-0.005,betaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")
+aHt <- (par()$usr[4]-par()$usr[3])/20
+arrows(betaCI,par()$usr[3]-0.005,betaCI,par()$usr[3]-aHt,
+       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)
 mtext(expression(paste("Ricker ",italic(b)," ",(10^{-4}),"")), 1, line=3, cex=1.2)
 mtext("Posterior probability", 2, cex=1.2)
 ```
@@ -657,17 +624,20 @@ for(i in 1:ncol(covars)) {
 	plot(tSeries, dat_cvrs[seq(length(tSeries)),i], xlab="", ylab="",
 		 main="", cex.lab=1.3, pch=16, col="blue3", type="o")
 	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),
-		 y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])
 	mtext(side=2, cov_names[i], line=3)
 	if(i==ncol(covars)) { mtext(side=1,"Brood year", line=3) }
 	## plot covar effect
 	hist(covars[,grep(colnames(dat_cvrs)[i],colnames(covars))],
 	     freq=FALSE,breaks=brks,col=clr,border="blue3",
-		 xlab="", yaxt="n",
-		 main="", ylab="", cex.lab=1.2)
+	     xlab="", yaxt="n", main="", ylab="", cex.lab=1.2)
+	c_CI <- quantile(covars[,grep(colnames(dat_cvrs)[i],colnames(covars))],c(0.025,0.5,0.975))
+	aHt <- (par()$usr[4]-par()$usr[3])/20
+	arrows(c_CI,par()$usr[3]-0.005,c_CI,par()$usr[3]-aHt,
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)
 	abline(v=0, lty="dashed")
 	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),
-		 y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i+ncol(covars)])
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i+ncol(covars)])
 	if(i==ncol(covars)) { mtext(side=1,"Effect size", line=3) }
 }
 ```
@@ -952,8 +922,8 @@ Here are the estimated optimal yield profiles based on the alternative states of
 par(mai=c(0.8,0.8,0.1,0.1), omi=c(0,0,0,0.2))
 matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),
 		xlab="Escapement", ylab="Probability", lwd=2)
-points(x=c(4900,5700,6450), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")
-text(x=c(4900,5700,6450), y=c(0.6,0.5,0.4), c("90%","80%","70%"),
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),
 	 col=c("darkblue","blue","slateblue"), cex=0.7)
 ```
 
