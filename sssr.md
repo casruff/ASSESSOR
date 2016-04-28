@@ -1,9 +1,8 @@
 # ASSESSOR: An age-structured state-space stock-recruit model for Pacific salmon
-`r Sys.Date()`  
 
 ***
 
-## Contributors
+### Contributors
 [__Mark D. Scheuerell__](https://faculty.washington.edu/scheuerl/)  
 _Fish Ecology Division, Northwest Fisheries Science Center, National Marine Fisheries Service, National Oceanic and Atmospheric Administration, Seattle, WA USA, mark.scheuerell@noaa.gov_
 
@@ -23,6 +22,9 @@ _Ocean Associates, Northwest Fisheries Science Center, National Marine Fisheries
 
 [__James T. Thorson__](https://sites.google.com/site/thorsonresearch/)  
 _Fishery Resource Analysis and Monitoring Division, Northwest Fisheries Science Center, National Marine Fisheries Service, National Oceanic and Atmospheric Administration, Seattle, WA USA, james.thorson@noaa.gov_
+
+### Version
+This is version 0.16.04.28.
 
 ***
 
@@ -79,7 +81,7 @@ $$d_{a,t} = {N_{a,t} \over \displaystyle \sum_{a=a_\min}^{a_\max} N_{a,t}}.$$
 ## Requirements
 ASSESSOR requires the [R software](https://cran.r-project.org/) (v3.2.3) for data retrieval, data processing, and summarizing model results, and the [JAGS software](http://mcmc-jags.sourceforge.net/) (v4.2.0) for Markov chain Monte Carlo (MCMC) simulation. Please note that some of the R code below may not work with older versions of JAGS due to some changes in the ways that arrays are handled.
 
-We also need the `R2jags` and `gsl` packages, which are not included with base `R`, so we begin by installing them (if necessary) and then loading them.
+We also need a few packages that are not included with base `R`, so we begin by installing them (if necessary) and then loading them.
 
 
 ```r
