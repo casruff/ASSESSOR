@@ -24,8 +24,10 @@ _Ocean Associates, Northwest Fisheries Science Center, National Marine Fisheries
 [__James T. Thorson__](https://sites.google.com/site/thorsonresearch/)  
 _Fishery Resource Analysis and Monitoring Division, Northwest Fisheries Science Center, National Marine Fisheries Service, National Oceanic and Atmospheric Administration, Seattle, WA USA, james.thorson@noaa.gov_
 
+***
+
 ## Overview
-ASSESSOR incorporates data on spawners (escapement), harvest, and age composition into a retrospective run reconstruction and probabilistic forecast under a Bayesian framework. The general structure follows that of Fleischman _et al._ (2013), but it also allows for the inclusion of specific external drivers of productivity, both natural (e.g., climate variability) and anthropogenic (e.g., flow alteration). The model is composed of two primary pieces: a process model that governs the true population dynamics, and an observation model that relates the data in hand to the true process.
+ASSESSOR incorporates data on spawners (escapement), harvest, and age composition into a retrospective run reconstruction and probabilistic forecast under a Bayesian framework. The general structure follows that of Fleischman et al. [-@fleischman2013], but ASSESSOR also allows for the inclusion of specific external drivers of productivity, both natural (e.g., climate variability) and anthropogenic (e.g., flow alteration). The model is composed of two primary pieces: a process model that governs the true population dynamics, and an observation model that relates the data in hand to the true process.
 
 ### Process component
 We begin with our process model that describes the true, but unknown production of offspring from their parents. In any given year _t_, spawning adults produce some number of surviving offspring, which follows a general Ricker model, such that
@@ -34,7 +36,7 @@ $$\log(R_t) = \log(S_t) + a_t \ – bS_t + w_t.$$
 	
 Here $R_t$ is the total number of subsequent recruits (offspring) born in year _t_; $S_t$ is the true, but unobserved, number of spawning adults; $a_t$ is the annual density-independent productivity; $b$ is the strength of density dependence; and $w_t$ is a process error representing environmental stochasticity, which is autocorrelated over time according to $w_t \sim \text{N}(\phi w_{t-1}, q_a)$.
 
-Previous applications of time-varying productivity (e.g., Dorner _et al._ 2008, Peterman _et al._ 2003) have used a Markov form where $a_t \sim \text{N}(a_{t-1}, \sigma_a)$, but we will model $(a_t)$ as a function of time-varying covariates. Specifically,
+Previous applications of time-varying productivity [e.g., @peterman2003; @dorner2008] have used a Markov form where $a_t \sim \text{N}(a_{t-1}, \sigma_a)$, but we will model $(a_t)$ as a function of time-varying covariates. Specifically,
 
 $$a_t = \bar{a} + \sum_{i=1}^{M} c_{i,t} \ X_{i,t+h} $$
 
@@ -123,11 +125,11 @@ The example data we use here are for steelhead trout (_Oncorhynchus mykiss_) fro
 
 
 ```r
-## file with escapement data
+## 1. file with escapement data
 ## [n_yrs x 2] matrix of obs counts; 1st col is calendar yr
 fn_esc <- "SkagitSthdEsc.csv"
 
-## file with age comp data
+## 2. file with age comp data
 ## [n_yrs x (1+A)]; 1st col is calendar yr
 fn_age <- "SkagitSthdAge.csv"
 ## min & max ages
@@ -136,11 +138,11 @@ age_max <- 8
 ## years, if any, of age-comp to skip; see below
 age_skip <- 2
 
-## file with catch data
+## 3. file with harvest data
 ## [n_yrs x 2] matrix of obs catch; 1st col is calendar yr
 fn_harv <- "SkagitSthdCatch.csv"
 
-## file with covariate data
+## 4. file with covariate data
 ## [n_yrs x (1+MM)]; 1st col is calendar yr
 fn_cvrs <- "SkagitEnvCov.csv"
 
@@ -929,3 +931,6 @@ text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),
 
 ![](sssr_files/figure-html/plot_OYP-1.png)<!-- -->
 
+***
+
+## References
