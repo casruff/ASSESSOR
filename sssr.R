@@ -12,18 +12,18 @@ if(!require("gsl")) {
   library("gsl")
 }
 
-## ----real2prec-----------------------------------------------------------
+## ----define_real2prec----------------------------------------------------
 real2prec <- function(x,map="round",prec=1) {
-  if(prec==0) stop("\"prec\" cannot be 0")
-    do.call(map,list(x/prec))*prec
+  if(prec==0) { stop("\"prec\" cannot be 0") }
+  do.call(map,list(x/prec))*prec
 }
 
 ## ----get_user_inputs-----------------------------------------------------
-## file with escapement data
+## 1. file with escapement data
 ## [n_yrs x 2] matrix of obs counts; 1st col is calendar yr
 fn_esc <- "SkagitSthdEsc.csv"
 
-## file with age comp data
+## 2. file with age comp data
 ## [n_yrs x (1+A)]; 1st col is calendar yr
 fn_age <- "SkagitSthdAge.csv"
 ## min & max ages
@@ -32,11 +32,11 @@ age_max <- 8
 ## years, if any, of age-comp to skip; see below
 age_skip <- 2
 
-## file with catch data
+## 3. file with harvest data
 ## [n_yrs x 2] matrix of obs catch; 1st col is calendar yr
 fn_harv <- "SkagitSthdCatch.csv"
 
-## file with covariate data
+## 4. file with covariate data
 ## [n_yrs x (1+MM)]; 1st col is calendar yr
 fn_cvrs <- "SkagitEnvCov.csv"
 
@@ -182,7 +182,7 @@ model {
 	# brood years 2:(n_yrs-age_min)
 	for(t in 2:(n_yrs-age_min+n_fore)) {
 		# predicted recruits in BY t
-		ln_Rkr_a[t] <- Rkr_a + c_PDO*dat_cvrs[t,1] + c_Flow*dat_cvrs[t,2] + c_Hrel*dat_cvrs[t,3];
+		ln_Rkr_a[t] <- Rkr_a + c_Flow*dat_cvrs[t,1] + c_PDO*dat_cvrs[t,2] + c_Hrel*dat_cvrs[t,3];
 		E_ln_Rec[t] <- ln_Sp[t] + ln_Rkr_a[t] - Rkr_b*Sp[t];
 		tot_ln_Rec[t] ~ dnorm(E_ln_Rec[t] + phi*res_ln_Rec[t-1],tau_Qr);
 		res_ln_Rec[t] <- tot_ln_Rec[t] - E_ln_Rec[t];
@@ -255,6 +255,10 @@ model {
 
 ", file=fn_jags)
 
+## ----start_timer, include=FALSE------------------------------------------
+## start timer
+timer_start <- proc.time()
+
 ## ----JAGS_IO, message=FALSE, warning=FALSE, cache=TRUE-------------------
 ## data to pass to JAGS
 dat_jags <- c("dat_age","ln_dat_esc","dat_harv","dat_cvrs",
@@ -268,15 +272,15 @@ par_jags <- c("alpha","mu_Rkr_a","Rkr_b","Sp","Rec","tot_ln_Rec","ln_RS",
 ## 3. MCMC control params
 # MCMC parameters
 mcmc_chains <- 4
-mcmc_length <- 10e3
-mcmc_burn <- 5e3
-mcmc_thin <- 10
+mcmc_length <- 10e5
+mcmc_burn <- 5e5
+mcmc_thin <- 1000
 # total number of MCMC samples
 mcmc_samp <- (mcmc_length-mcmc_burn)*mcmc_chains/mcmc_thin
 
 ## function to create JAGS inits
 init_vals <- function() {
-	list(Rkr_a=1, c_Flow=0.1, c_PDO=-0.1, c_Hrel=-0.2,
+	list(Rkr_a=1, c_Flow=0, c_PDO=0, c_Hrel=0,
 	     Rkr_b=1/exp(mean(ln_dat_esc, na.rm=TRUE)),
 	     piHD=1, muHD=rep(1,A),
 	     p_vec=matrix(c(0.01,0.3,0.48,0.15,0.05,0.01),n_yrs-age_min+n_fore,A,byrow=TRUE),
@@ -297,14 +301,13 @@ mod_jags <- list(data=dat_jags,
 				 n.thin=as.integer(mcmc_thin),
 				 DIC=TRUE)
 
-## start timer
-timer_start <- proc.time()
-
 ## fit the model in JAGS & store results
 mod_fit <- do.call(jags.parallel, mod_jags)
 
+## ----stop_timer, include=FALSE-------------------------------------------
 ## stop timer
-(run_time_in_min <- round(((proc.time()-timer_start)/60)["elapsed"], 1))
+run_time_in_min <- round(((proc.time()-timer_start)/60)["elapsed"], 1)
+cat(run_time_in_min, file="run_time_in_min.txt")
 
 ## ----model_diagnostics, eval=TRUE----------------------------------------
 ## Rhat values for all parameters
@@ -327,34 +330,42 @@ idx <- as.integer(sub("(^.*\\[)([0-9]{1,3})(.*)","\\2",names(bad_Rhat)))
 (df <- data.frame(par=par_names, index=idx))
 
 ## ----tbl_summary_stats---------------------------------------------------
-print(mod_fit$BUGSoutput$summary[c("alpha","Rkr_b","c_Flow","c_PDO","c_Hrel","var_Qr","var_Rs"),
+print(mod_fit$BUGSoutput$summary[c("mu_Rkr_a","alpha","Rkr_b",
+                                   "c_Flow","c_PDO","c_Hrel",
+                                   "var_Qr","var_Rs"),
                                  c("mean","sd","2.5%","50%","97.5%")],
       digits=3,quote=FALSE,justify="right")
 
-## ----plot_Ricker_a, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE----
+## ----plot_Ricker_a, fig.width=8, fig.height=4, fig.pos="placeHere", eval=TRUE----
 clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
 par(mfrow=c(1,2), mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))
 ## Ricker a
-R_a_est <- mod_fit$BUGSoutput$sims.list$Rkr_a
+R_a_est <- mod_fit$BUGSoutput$sims.list$mu_Rkr_a
+R_a_est[R_a_est>3] <- 3
 alphaCI <- quantile(R_a_est,c(0.025,0.5,0.975))
-hist(R_a_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_a_est)/0.1)*0.1,0.1),
+brks <- seq(floor(min(R_a_est)/0.1)*0.1,ceiling(max(R_a_est)/0.1)*0.1,0.1)
+hist(R_a_est,freq=FALSE,xlab="",main="",breaks=brks,
      col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")
-aHt <- (par()$usr[4]-par()$usr[3])/10
-arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")
+aHt <- (par()$usr[4]-par()$usr[3])/20
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,
+       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)
 mtext(expression(paste("Ricker ",italic(a))), 1, line=3, cex=1.2)
 mtext("Posterior probability", 2, cex=1.2)
 ## Ricker alpha
-R_alpha_est <- mod_fit$BUGSoutput$sims.list$alpha
+#R_alpha_est <- mod_fit$BUGSoutput$sims.list$alpha
+R_alpha_est <- exp(R_a_est)
+R_alpha_est[R_alpha_est>9] <- 9
 alphaCI <- quantile(R_alpha_est,c(0.025,0.5,0.975))
-hist(R_alpha_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_alpha_est)/0.1)*0.1,0.1),
+hist(R_alpha_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_alpha_est)/0.3)*0.3,0.3),
      col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")
-aHt <- (par()$usr[4]-par()$usr[3])/10
-arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")
+aHt <- (par()$usr[4]-par()$usr[3])/20
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,
+       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)
 #mtext("Ricker exp(a)", 1, line=3, cex=1.2)
 mtext(expression(paste("Ricker ",alpha," ",(e^italic(a)))), 1, line=3, cex=1.2)
 mtext("Posterior probability", 2, cex=1.2)
 
-## ----plot_Ricker_b, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE----
+## ----plot_Ricker_b, fig.width=4, fig.height=4, fig.pos="placeHere", eval=TRUE----
 par(mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))
 RbDat <- mod_fit$BUGSoutput$sims.list$Rkr_b
 RbDat <- RbDat*10^abs(floor(log(max(RbDat),10)))
@@ -365,12 +376,13 @@ hist(RbDat, freq=FALSE, breaks=brks, col=clr, border="blue3",
 	 xlab="", xaxt="n", yaxt="n",
 	 main="", ylab="Posterior density", cex.lab=1.2)
 axis(1, at=seq(0,3))
-aHt <- (par()$usr[4]-par()$usr[3])/10
-arrows(betaCI,par()$usr[3]-0.005,betaCI,par()$usr[3]-aHt,code=1,length=0.05,xpd=NA,col="blue3")
+aHt <- (par()$usr[4]-par()$usr[3])/20
+arrows(betaCI,par()$usr[3]-0.005,betaCI,par()$usr[3]-aHt,
+       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)
 mtext(expression(paste("Ricker ",italic(b)," ",(10^{-4}),"")), 1, line=3, cex=1.2)
 mtext("Posterior probability", 2, cex=1.2)
 
-## ----plot_cov_effects, fig.width=6.5, fig.height=8.5, fig.pos="placeHere", warnings=FALSE, messages=FALSE, eval=TRUE----
+## ----plot_cov_effects, fig.width=8, fig.height=8.5, fig.pos="placeHere", warnings=FALSE, messages=FALSE, eval=TRUE----
 clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
 offSet <- 0.07
 covars <- mod_fit$BUGSoutput$sims.matrix[,grep("c_",names(mod_fit$BUGSoutput$sims.list),value=TRUE)]
@@ -378,24 +390,27 @@ par(mfrow=c(ncol(covars),2), mai=c(0.4,0.2,0.1,0.1), omi=c(0.2,0.4,0,0))
 ylN <- floor(min(covars)*10)/10
 ylM <- ceiling(max(covars)*10)/10
 brks <- seq(ylN,ylM,length.out=diff(c(ylN,ylM))*40+1)
-cov_names <- c("Flow","H releases","PDO")
+cov_names <- c("Flow","PDO","H releases")
 tSeries <- seq(yr_frst,length.out=n_yrs-age_min)
 for(i in 1:ncol(covars)) {
-	# plot covar ts
+	## plot covar ts
 	plot(tSeries, dat_cvrs[seq(length(tSeries)),i], xlab="", ylab="",
 		 main="", cex.lab=1.3, pch=16, col="blue3", type="o")
 	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),
-		 y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])
 	mtext(side=2, cov_names[i], line=3)
 	if(i==ncol(covars)) { mtext(side=1,"Brood year", line=3) }
-	# plot covar effect
+	## plot covar effect
 	hist(covars[,grep(colnames(dat_cvrs)[i],colnames(covars))],
 	     freq=FALSE,breaks=brks,col=clr,border="blue3",
-		 xlab="", yaxt="n",
-		 main="", ylab="", cex.lab=1.2)
+	     xlab="", yaxt="n", main="", ylab="", cex.lab=1.2)
+	c_CI <- quantile(covars[,grep(colnames(dat_cvrs)[i],colnames(covars))],c(0.025,0.5,0.975))
+	aHt <- (par()$usr[4]-par()$usr[3])/20
+	arrows(c_CI,par()$usr[3]-0.005,c_CI,par()$usr[3]-aHt,
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)
 	abline(v=0, lty="dashed")
 	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),
-		 y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i+ncol(covars)])
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i+ncol(covars)])
 	if(i==ncol(covars)) { mtext(side=1,"Effect size", line=3) }
 }
 
@@ -602,7 +617,7 @@ OYP <- OYP/mcmc
 par(mai=c(0.8,0.8,0.1,0.1), omi=c(0,0,0,0.2))
 matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),
 		xlab="Escapement", ylab="Probability", lwd=2)
-points(x=c(4900,5700,6450), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")
-text(x=c(4900,5700,6450), y=c(0.6,0.5,0.4), c("90%","80%","70%"),
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),
 	 col=c("darkblue","blue","slateblue"), cex=0.7)
 

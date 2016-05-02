@@ -488,7 +488,7 @@ The convergence statistics indicate that some of the elements in $p$ the estimat
 
 ## Results
 
-Here is a table that summarizes the median and 95% credible interval for some of the model parameters.
+Here is a table of summary statistics for some of the model parameters.
 
 ```{r tbl_summary_stats}
 print(mod_fit$BUGSoutput$summary[c("mu_Rkr_a","alpha","Rkr_b",
@@ -558,7 +558,7 @@ mtext("Posterior probability", 2, cex=1.2)
 
 ### Covariate effects
 
-Here are plots of the covariate time series (_z_-scores, A-C) and their effects on productivity (D-F).
+Here are plots of the covariate time series (_z_-scores, A-C) and histograms of their effects on productivity (D-F).
 
 ```{r plot_cov_effects, fig.width=8, fig.height=8.5, fig.pos="placeHere", warnings=FALSE, messages=FALSE, eval=TRUE}
 clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
@@ -754,11 +754,11 @@ text(par()$usr[2],lbl[5],"7&8", xpd=NA, pos=4, offset=0.15, col="black", cex=0.7
 
 ### Spawner-recruit relationship
 
-Here is the relationship between spawner and subsequent recruits. Gray lines show 200 possible relationships based on random draws from the posterior distributions for Ricker's _a_ and _b_ parameters.
+Here is the relationship between spawner and subsequent recruits. Gray lines show 100 possible relationships based on random draws from the posterior distributions for Ricker's _a_ and _b_ parameters.
 
 ```{r plot_SR, fig.width=6, fig.height=5, fig.pos="placeHere", eval=TRUE}
 CI.vec <- c(0.025,0.5,0.975)
-MC <- 200
+MC <- 100
 idx <- sample(seq(mcmc_samp),MC)
 sDat <- apply(mod_fit$BUGSoutput$sims.list$Sp,2,sort)
 sDat <- apply(sDat,2,function(x) { x[mcmc_samp*CI.vec] })
@@ -799,7 +799,7 @@ Here are a number of management reference points.
 
 ```{r ref_pts, eval=TRUE}
 # abbreviations for ref points
-refNames <- c("Smsy","Umsy","MSY","Umax","MSR","Smsr","Seq")
+refNames <- c("MSY","Smsy","Umsy")
 # proportions of MSY to consider
 yieldProps <- c(0.7,0.8,0.9)
 propNames <- paste("OYP",yieldProps,sep="")
@@ -807,27 +807,19 @@ lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)
 bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)
 mcmc <- length(lnA)
 # empty matrix for ref pts
-ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))
-colnames(ref.pts) <- c(refNames,propNames)
+ref.pts <- matrix(NA,mcmc,length(refNames))
+colnames(ref.pts) <- refNames
 # spawner series for optimal yield profile
 SS <- seq(100,1e4,100)
-# empty matrix for OLP
+# empty matrix for optimal yield profiles
 OYP <- matrix(0,length(SS),length(yieldProps))
 for(i in 1:mcmc) {
 	# spawners at MSY
 	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]
-	# harvest rate at MSY
-	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))
 	# MSY
 	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)
-	# maximum harvest rate
-	ref.pts[i,"Umax"] <- 1 - 1/lnA[i]
-	# maximum sustained production
-	ref.pts[i,"MSR"] <- lnA[i]/(bb[i]*exp(1))
-	# spawners at MSR
-	ref.pts[i,"Smsr"] <- 1/bb[i]
-	# equil spawning abundance
-	ref.pts[i,"Seq"] <- lnA[i]/bb[i]
+	# harvest rate at MSY
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))
 	# yield over varying S
 	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)
 	for(j in 1:length(yieldProps)) {
@@ -837,17 +829,40 @@ for(i in 1:mcmc) {
 OYP <- OYP/mcmc
 ```
 
-### Optimal yield profiles
+Here are histograms of the estimated (A) maximum sustainable yield, (B) spawners at MSY, (C) harvest rate at MSY, and (D) the optimal yield profiles based on the alternative states of nature.
 
-Here are the estimated optimal yield profiles based on the alternative states of nature.
-
-```{r plot_OYP, fig.width=6, fig.height=4, fig.pos="placeHere", eval=TRUE}
-par(mai=c(0.8,0.8,0.1,0.1), omi=c(0,0,0,0.2))
-matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),
-		xlab="Escapement", ylab="Probability", lwd=2)
-points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")
-text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),
-	 col=c("darkblue","blue","slateblue"), cex=0.7)
+```{r plot_OYP, fig.width=8, fig.height=8, fig.pos="placeHere", eval=TRUE}
+ttl <- expression(bold(MSY), bold(S[MSY]), bold(U[MSY]))
+x_lbl <- c("Escapement","Escapement","Rate")
+plt_dat <- ref.pts
+plt_dat[plt_dat>1e4] <- 1e4
+offSet <- 0.07
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
+for(i in 1:3) {
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),
+	     freq=FALSE,breaks=50,col=clr,border="blue3",
+	     xlab=x_lbl[i], yaxt="n", main=ttl[i], ylab="", cex.lab=1.2)
+	mtext("Posterior probability", 2, cex=1)
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))
+	aHt <- (par()$usr[4]-par()$usr[3])/20
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])
+}
+x_lp <- yieldProps
+for(i in 1:length(x_lp)) {
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]
+}
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.2, bty="n",
+		main="Optimal yield profiles")
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
 ```
 
 ***
