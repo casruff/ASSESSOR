@@ -1,0 +1,2308 @@
+## ----get_user_inputs-----------------------------------------------------#
+## 1. file with escapement data#
+## [n_yrs x 2] matrix of obs counts; 1st col is calendar yr#
+fn_esc <- "SkagitSthdEsc.csv"#
+#
+## 2. file with age comp data#
+## [n_yrs x (1+A)]; 1st col is calendar yr#
+fn_age <- "SkagitSthdAge.csv"#
+## min & max ages#
+age_min <- 3#
+age_max <- 8#
+## years, if any, of age-comp to skip; see below#
+age_skip <- 2#
+#
+## 3. file with harvest data#
+## [n_yrs x 2] matrix of obs catch; 1st col is calendar yr#
+fn_harv <- "SkagitSthdCatch.csv"#
+#
+## 4. file with covariate data#
+## [n_yrs x (1+MM)]; 1st col is calendar yr#
+fn_cvrs <- "SkagitEnvCov.csv"#
+#
+## number of years of forecasts#
+n_fore <- 1#
+#
+## file where to save JAGS model#
+fn_jags <- "SkagitSthd_RR_JAGS.txt"#
+#
+## upper threshold for Gelman & Rubin's (1992) potential scale reduction factor (Rhat).#
+Rhat_thresh <- 1.1#
+#
+## URL for example data files#
+## set to NULL if using a local folder/directory#
+ex_url <- "https://raw.githubusercontent.com/mdscheuerell/ASSESSOR/master/"#
+#
+## ----get_escapement_data-------------------------------------------------#
+## escapement#
+#dat_esc <- read.table(paste0(ex_url,fn_esc), header=TRUE, sep=",")#
+dat_esc <- read.csv(text = getURL(paste0(ex_url,fn_esc)))#
+## years of data#
+dat_yrs <- dat_esc$year#
+## number of years of data#
+n_yrs <- length(dat_yrs)#
+## get first & last years#
+yr_frst <- min(dat_yrs)#
+yr_last <- max(dat_yrs)#
+## log of escapement#
+ln_dat_esc <- c(log(dat_esc[,-1]),rep(NA,n_fore))#
+#
+## ----get_age_data--------------------------------------------------------#
+## age comp data#
+dat_age <- read.csv(text = getURL(paste0(ex_url,fn_age)))#
+## drop year col & first age_min+age_skip rows#
+dat_age <- dat_age[-(1:(age_min+age_skip)),-1]#
+## num of age classes#
+A <- age_max-age_min+1#
+## add row(s) of NA's for forecast years#
+dat_age <- rbind(dat_age,matrix(0,n_fore,A,dimnames=list(n_yrs+seq(n_fore),colnames(dat_age))))#
+## total num of age obs by cal yr#
+dat_age[,"sum"] <- apply(dat_age,1,sum)#
+## row indices for any years with no obs age comp#
+idx_NA_yrs <- which(dat_age$sum<A,TRUE)#
+## replace 0's in yrs w/o any obs with NA's#
+dat_age[idx_NA_yrs,(1:A)] <- NA#
+## change total in yrs w/o any obs from 0 to A to help dmulti()#
+dat_age[idx_NA_yrs,"sum"] <- A#
+## convert class#
+dat_age <- as.matrix(dat_age)#
+#
+## ----get_harvest---------------------------------------------------------#
+## harvest#
+dat_harv <- read.csv(text = getURL(paste0(ex_url,fn_harv)))#
+## drop year col & first age_max rows#
+dat_harv <- c(dat_harv[,-1],rep(0,n_fore))#
+#
+## ----get_covariates------------------------------------------------------#
+## covariate(s)#
+dat_cvrs <- read.csv(text = getURL(paste0(ex_url,fn_cvrs)))#
+## drop year col#
+dat_cvrs <- dat_cvrs[,-1]#
+## transform the covariates to z-scores#
+dat_cvrs <- scale(dat_cvrs)
+## ----JAGS_IO, message=FALSE, warning=FALSE, cache=TRUE-------------------#
+## data to pass to JAGS#
+dat_jags <- c("dat_age","ln_dat_esc","dat_harv","dat_cvrs",#
+              "n_yrs","A","age_min","age_max","age_skip","n_fore")#
+#
+## 2. model params/states for JAGS to return#
+par_jags <- c("alpha","mu_Rkr_a","Rkr_b","Sp","Rec","tot_ln_Rec","ln_RS",#
+              "c_Flow","c_PDO","c_Hrel",#
+              "var_Qr","var_Rs","p_vec","res_ln_Rec")#
+#
+## 3. MCMC control params#
+# MCMC parameters#
+mcmc_chains <- 4#
+mcmc_length <- 10e5#
+mcmc_burn <- 5e5#
+mcmc_thin <- 1000#
+# total number of MCMC samples#
+mcmc_samp <- (mcmc_length-mcmc_burn)*mcmc_chains/mcmc_thin
+## ----model_diagnostics, eval=TRUE----------------------------------------#
+## Rhat values for all parameters#
+rh <- mod_fit$BUGSoutput$summary[,"Rhat"]#
+## histogram of Rhat values for all parameters#
+par(mai=c(0.9,0.9,0.3,0.1))#
+hist(rh, breaks=seq(1,ceiling(max(rh)/0.01)*0.01,by=0.01),main="",#
+     col=rgb(0,0,255,alpha=50,maxColorValue=255),border="blue3",xlab=expression(italic(R[hat])))#
+## Rhat values > threshold#
+bad_Rhat <- rh[rh>Rhat_thresh]#
+## prop of params with Rhat > threshold#
+round(length(bad_Rhat)/length(rh),2)#
+## param names#
+par_names <- sub("\\[.*","",names(bad_Rhat))#
+## number of Rhat > threshold by param name#
+table(par_names)#
+## index values for offenders#
+idx <- as.integer(sub("(^.*\\[)([0-9]{1,3})(.*)","\\2",names(bad_Rhat)))#
+## data frame of offenders#
+(df <- data.frame(par=par_names, index=idx))
+## ----tbl_summary_stats---------------------------------------------------#
+print(mod_fit$BUGSoutput$summary[c("mu_Rkr_a","alpha","Rkr_b",#
+                                   "c_Flow","c_PDO","c_Hrel",#
+                                   "var_Qr","var_Rs"),#
+                                 c("mean","sd","2.5%","50%","97.5%")],#
+      digits=3,quote=FALSE,justify="right")
+# abbreviations for ref points#
+refNames <- c("Smsy","Umsy","MSY","Umax","MSR","Smsr","Seq")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	ref.pts[i,"Umax"] <- 1 - 1/lnA[i]#
+	# maximum sustained production#
+	ref.pts[i,"MSR"] <- lnA[i]/(bb[i]*exp(1))#
+	# spawners at MSR#
+	ref.pts[i,"Smsr"] <- 1/bb[i]#
+	# equil spawning abundance#
+	ref.pts[i,"Seq"] <- lnA[i]/bb[i]#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc
+hist(ref.pts[,"Smsy"],breaks=41)
+hist(ref.pts[,"Umsy"],breaks=41)
+hist(ref.pts[,"MSY"],breaks=41)
+hist(ref.pts[,"MSR"],breaks=41)
+tail(sort(lnA))
+hist(ref.pts[,"Smsy"],breaks=41)
+## ----plot_Ricker_a, fig.width=8, fig.height=4, fig.pos="placeHere", eval=TRUE----#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+par(mfrow=c(1,2), mai=c(0.8,0.4,0.3,0.1), omi=c(0,0,0,0.2))#
+## Ricker a#
+R_a_est <- mod_fit$BUGSoutput$sims.list$mu_Rkr_a#
+R_a_est[R_a_est>3] <- 3#
+alphaCI <- quantile(R_a_est,c(0.025,0.5,0.975))#
+brks <- seq(floor(min(R_a_est)/0.1)*0.1,ceiling(max(R_a_est)/0.1)*0.1,0.1)#
+hist(R_a_est,freq=FALSE,xlab="",main="",breaks=brks,#
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")#
+aHt <- (par()$usr[4]-par()$usr[3])/20#
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,#
+       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+mtext(expression(paste("Ricker ",italic(a))), 1, line=3, cex=1.2)#
+mtext("Posterior probability", 2, cex=1.2)#
+## Ricker alpha#
+#R_alpha_est <- mod_fit$BUGSoutput$sims.list$alpha#
+R_alpha_est <- exp(R_a_est)#
+R_alpha_est[R_alpha_est>9] <- 9#
+alphaCI <- quantile(R_alpha_est,c(0.025,0.5,0.975))#
+hist(R_alpha_est,freq=FALSE,xlab="",main="",breaks=seq(0,ceiling(max(R_alpha_est)/0.3)*0.3,0.3),#
+     col=clr, border="blue3", ylab="", cex.lab=1.2, yaxt="n")#
+aHt <- (par()$usr[4]-par()$usr[3])/20#
+arrows(alphaCI,par()$usr[3],alphaCI,par()$usr[3]-aHt,#
+       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+#mtext("Ricker exp(a)", 1, line=3, cex=1.2)#
+mtext(expression(paste("Ricker ",alpha," ",(e^italic(a)))), 1, line=3, cex=1.2)#
+mtext("Posterior probability", 2, cex=1.2)
+which(lnA==max(lnA))
+hist(ref.pts[,"Smsy"],breaks=41)
+hist(log(ref.pts[,"Smsy"]),breaks=41)
+hist(ref.pts[,"Smsy"],breaks=41)
+dev.new(height=8,width=8)#
+#
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.1,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Probability", lwd=2)#
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")#
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.3,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Probability", lwd=2)#
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")#
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+sum(lnA>4)
+sum(lnA>3)
+which(lnA>4)
+## exclude extreme a's values & assoc b's#
+lnA <- lnA[-which(lnA>4)]#
+bb <- bb[-which(lnA>4)]
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc#
+#
+## ----plot_OYP, fig.width=8, fig.height=8, fig.pos="placeHere", eval=TRUE----#
+dev.new(height=8,width=8)#
+#
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.3,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")#
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+length(lnA)
+length(bb)
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)
+length(lnA)
+length(bb)
+bb[-which(lnA>4)]
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+## exclude extreme a's values & assoc b's#
+lnA <- lnA[-which(lnA>4)]#
+bb <- bb[-which(lnA>4)]#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc#
+#
+## ----plot_OYP, fig.width=8, fig.height=8, fig.pos="placeHere", eval=TRUE----#
+dev.new(height=8,width=8)#
+#
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.3,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")#
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+length(lnA)
+head(ref.pts)
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+## exclude extreme a's values & assoc b's#
+lnA <- lnA[-which(lnA>4)]#
+bb <- bb[-which(lnA>4)]#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))
+head(ref.pts)
+i=1
+(1 - lambert_W0(exp(1-lnA[i]))) / bb[i]
+lnA[i]
+bb[i]
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc
+-which(lnA>4)
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)
+-c(which(lnA>4))
+lnA<4
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+## exclude extreme a's values & assoc b's#
+lnA <- lnA[lnA<4]#
+bb <- bb[lnA<4]
+length(lnA)
+length(bb)
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+## exclude extreme a's values & assoc b's#
+lnA_trim <- lnA<4#
+lnA <- lnA[lnA_trim]#
+bb <- bb[lnA_trim]#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc#
+#
+## ----plot_OYP, fig.width=8, fig.height=8, fig.pos="placeHere", eval=TRUE----#
+dev.new(height=8,width=8)#
+#
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.3,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")#
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+## exclude extreme a's values & assoc b's#
+lnA_trim <- lnA<3#
+lnA <- lnA[lnA_trim]#
+bb <- bb[lnA_trim]#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc#
+#
+## ----plot_OYP, fig.width=8, fig.height=8, fig.pos="placeHere", eval=TRUE----#
+dev.new(height=8,width=8)#
+#
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.3,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")#
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+max(lnA)
+(1 - lambert_W0(exp(1-2.51)))
+ref.pts[ref.pts[,"MSY"]<1e4,"MSY"] <- 1e4#
+ref.pts[ref.pts[,"Smsy"]<1e4,"MSY"] <- 1e4#
+## ----plot_OYP, fig.width=8, fig.height=8, fig.pos="placeHere", eval=TRUE----#
+dev.new(height=8,width=8)#
+#
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.3,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")#
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.3,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")#
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+ref.pts[ref.pts[,"MSY"]>1e4,"MSY"] <- 1e4#
+ref.pts[ref.pts[,"MSY"]>1e4,"MSY"] <- 1e4#
+## ----plot_OYP, fig.width=8, fig.height=8, fig.pos="placeHere", eval=TRUE----#
+dev.new(height=8,width=8)#
+#
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.3,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")#
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc#
+ref.pts[ref.pts[,"MSY"]>1e4,"MSY"] <- 1e4#
+ref.pts[ref.pts[,"Smsy"]>1e4,"MSY"] <- 1e4#
+## ----plot_OYP, fig.width=8, fig.height=8, fig.pos="placeHere", eval=TRUE----#
+dev.new(height=8,width=8)#
+#
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.3,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")#
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc#
+ref.pts[ref.pts[,"MSY"]>1e4,"MSY"] <- 1e4#
+ref.pts[ref.pts[,"Smsy"]>1e4,"Smsy"] <- 1e4#
+## ----plot_OYP, fig.width=8, fig.height=8, fig.pos="placeHere", eval=TRUE----#
+dev.new(height=8,width=8)#
+#
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.3,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")#
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")#
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+OYP
+max(OYP[,1])
+OYP[,1] = max(OYP[,1])
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc#
+ref.pts[ref.pts[,"MSY"]>1e4,"MSY"] <- 1e4#
+ref.pts[ref.pts[,"Smsy"]>1e4,"Smsy"] <- 1e4
+OYP[,1] == max(OYP[,1])
+OYP[,1] == 0.6
+round(OYP[,1],2) == 0.60
+round(OYP[,1],2)
+round(OYP[,1],3) == 0.6
+round(OYP[,1],3)
+round(OYP[,1],1) == 0.6
+round(OYP[,1],1)
+round(OYP[,1],1)==0.0
+round(OYP[,1],1)==0.6
+which(OYP[,1] == max(OYP[,1]))
+which(round(OYP[,1],1) == 0.6)
+OYP[,1] == max(OYP[,1])
+which(OYP[,1] == max(OYP[,1]) | round(OYP[,1],1) == 0.6)
+max(which(OYP[,1] == max(OYP[,1]) | round(OYP[,1],1) == 0.6))
+SS[max(which(OYP[,1] == max(OYP[,1]) | round(OYP[,1],1) == 0.6))]
+SS[max(which(OYP[,1] == max(OYP[,1]) | round(OYP[,1],1) == 0.4))]#
+SS[max(which(OYP[,2] == max(OYP[,1]) | round(OYP[,1],1) == 0.5))]#
+SS[max(which(OYP[,3] == max(OYP[,1]) | round(OYP[,1],1) == 0.6))]
+SS[max(which(OYP[,1] == max(OYP[,1]) | round(OYP[,1],1) == 0.4))]#
+SS[max(which(OYP[,2] == max(OYP[,2]) | round(OYP[,2],1) == 0.5))]#
+SS[max(which(OYP[,3] == max(OYP[,3]) | round(OYP[,3],1) == 0.6))]
+SS[max(which(OYP[,1] == max(OYP[,1]) | round(OYP[,1],1) == 0.4))]#
+SS[max(which(OYP[,2] == max(OYP[,2]) | round(OYP[,2],1) == 0.5))]#
+SS[max(which(OYP[,3] == max(OYP[,3]) | round(OYP[,3],1) == 0.6))]
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | round(OYP[,i],1) == yieldProps[i]-0.3))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+x_lbl
+x_lbl <- yieldProps
+i=1
+which(OYP[,i] == max(OYP[,i])
+round(OYP[,i],1)
+which(OYP[,i] == max(OYP[,i]) | round(OYP[,i],1)
+max(OYP[,i])
+max(OYP[,i])
+which(OYP[,i] == max(OYP[,i]) | round(OYP[,i],1) == yieldProps[i]-0.3)
+SS[max(which(OYP[,1] == max(OYP[,1]) | round(OYP[,1],1) == 0.4))]
+SS[max(which(OYP[,2] == max(OYP[,2]) | round(OYP[,2],1) == 0.5))]
+SS[max(which(OYP[,3] == max(OYP[,3]) | round(OYP[,3],1) == 0.6))]
+i=1
+yieldProps[i]-0.3
+round(OYP[,i],1) == yieldProps[i]-0.3
+OYP[,i] == max(OYP[,i])
+SS[41]
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc
+ref.pts[ref.pts[,"MSY"]>1e4,"MSY"] <- 1e4#
+ref.pts[ref.pts[,"Smsy"]>1e4,"Smsy"] <- 1e4
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), pch=21, cex=3.5, col="white", bg="white")#
+text(x=c(4900,5700,6400), y=c(0.6,0.5,0.4), c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | round(OYP[,i],1) == yieldProps[i]-0.3))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+x_lbl
+SS[max(which(OYP[,1] == max(OYP[,1]) | round(OYP[,1],1) == 0.4))]
+SS[max(which(OYP[,2] == max(OYP[,2]) | round(OYP[,2],1) == 0.5))]
+SS[max(which(OYP[,3] == max(OYP[,3]) | round(OYP[,3],1) == 0.6))]
+i=1
+OYP[,i] == max(OYP[,i])
+round(OYP[,i],1) == yieldProps[i]-0.3
+round(OYP[,i],1)
+yieldProps[i]-0.3
+round(OYP[,i],1) == yieldProps[i]-0.3)
+round(OYP[,i],1) == yieldProps[i]-0.3
+round(OYP[,i],1) == (yieldProps[i]-0.3)
+round(OYP[,i],1) == c(yieldProps[i]-0.3)
+round(OYP[,i],1)
+class(round(OYP[,i],1))
+class(yieldProps[i]-0.3)
+round(OYP[,i],1) %in% c(yieldProps[i]-0.3)
+all.equal(round(OYP[,i],1),yieldProps[i]-0.3)
+all.equal(yieldProps[i]-0.3,round(OYP[,i],1))
+round(OYP[,i],1) - yieldProps[i]-0.3
+OYP[,i],1
+round(OYP[,i],1)
+round(OYP[,i],1) - yieldProps[i]-0.3
+yieldProps[i]-0.3
+isTRUE(all.equal(yieldProps[i]-0.3,round(OYP[,i],1)))
+abs(round(OYP[,i],1) - yieldProps[i]-0.3)
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(round(OYP[,i],1) - yieldProps[i]-0.3) <= 0.0001))]#
+}
+x_lbl
+i=1
+OYP
+OYP[,1]
+OYP[,i]-yieldProps[i]
+OYP[,i]-(yieldProps[i]-0.3)
+abs(round(OYP[,i],1) - (yieldProps[i]-0.3))
+abs(round(OYP[,i],1) - (yieldProps[i]-0.3)) <= 0.0001)
+abs(round(OYP[,i],1) - (yieldProps[i]-0.3)) <= 0.0001
+abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.0001
+abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.001
+abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.01
+abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.1
+abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, c("90%","80%","70%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+OYP
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, c("70%","80%","90%"),#
+	 col=c("darkblue","blue","slateblue"), cex=0.7)
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, c("70%","80%","90%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting X% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc
+ref.pts
+head(ref.pts)
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc
+head(ref.pts)
+ref.pts[ref.pts[,"MSY"]>1e4,"MSY"] <- 1e4#
+ref.pts[ref.pts[,"Smsy"]>1e4,"Smsy"] <- 1e4
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+ref.pts <- matrix(NA,mcmc,length(refNames))#
+colnames(ref.pts) <- refNames#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc#
+ref.pts[ref.pts[,"MSY"]>1e4,"MSY"] <- 1e4#
+ref.pts[ref.pts[,"Smsy"]>1e4,"Smsy"] <- 1e4#
+## ----plot_OYP, fig.width=8, fig.height=8, fig.pos="placeHere", eval=TRUE----
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+head(ref.pts)
+sum(ref.pts>1e4)
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+ref.pts <- matrix(NA,mcmc,length(refNames))#
+colnames(ref.pts) <- refNames#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc
+sum(ref.pts>1e4)
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+ref.pts <- matrix(NA,mcmc,length(refNames))#
+colnames(ref.pts) <- refNames#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc
+hist(ref.pts[,"MSY"], breaks=41)#
+hist(ref.pts[,"Smsy"], breaks=41)#
+hist(ref.pts[,"Umsy"], breaks=41)#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+dev.new(height=8,width=8)#
+#
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=brks,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3]-0.005,c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	if(i==ncol(covars)) { mtext(side=1,"Effect size", line=3) }#
+}
+i
+max(plt_dat[,refNames[i]])
+max(ref.pts[,refNames[i]])
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],#xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=brks,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3]-0.005,c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	if(i==ncol(covars)) { mtext(side=1,"Effect size", line=3) }#
+}
+brks
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=41,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3]-0.005,c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	if(i==ncol(covars)) { mtext(side=1,"Effect size", line=3) }#
+}
+i
+quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))
+(par()$usr[4]-par()$usr[3])/20
+par()$usr[3]
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=41,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3]-0.005,c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=41,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	print(par()$usr)#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3]-0.005,c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}
+aHt
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=41,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	print(par()$usr)#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+#	arrows(c_CI,par()$usr[3]-0.005,c_CI,par()$usr[3]-aHt,#
+#	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	print(par()$usr)#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+#	arrows(c_CI,par()$usr[3]-0.005,c_CI,par()$usr[3]-aHt,#
+#	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}
+refNames <- c("MSY","Smsy","Umsy")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+ref.pts <- matrix(NA,mcmc,length(refNames))#
+colnames(ref.pts) <- refNames#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i, refNames[i]] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,refNames[i]] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,refNames[i]] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}
+refNames <- c("MSY","Smsy","Umsy")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(refNames))#
+colnames(ref.pts) <- refNames#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i, refNames[i]] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,refNames[i]] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# MSY#
+	ref.pts[i,refNames[i]] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# maximum harvest rate#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc
+refNames <- c("Smsy","Umsy","MSY")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+ref.pts <- matrix(NA,mcmc,length(refNames))#
+colnames(ref.pts) <- refNames#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc
+par(mfrow=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}
+i
+refNames[i]
+refNames <- c("MSY","Smsy","Umsy")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+ref.pts <- matrix(NA,mcmc,length(refNames))#
+colnames(ref.pts) <- refNames#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc
+hist(ref.pts[,"MSY"], breaks=41)
+hist(ref.pts[,"Smsy"], breaks=41)
+hist(ref.pts[,"Umsy"], breaks=41)
+refNames <- c("MSY","Smsy","Umsy")#
+# proportions of MSY to consider#
+yieldProps <- c(0.7,0.8,0.9)#
+propNames <- paste("OYP",yieldProps,sep="")#
+lnA <- matrix(mod_fit$BUGSoutput$sims.array[,,"mu_Rkr_a"],ncol=1)#
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)#
+#
+mcmc <- length(lnA)#
+# empty matrix for ref pts#
+ref.pts <- matrix(NA,mcmc,length(c(refNames,propNames)))#
+colnames(ref.pts) <- c(refNames,propNames)#
+ref.pts <- matrix(NA,mcmc,length(refNames))#
+colnames(ref.pts) <- refNames#
+# spawner series for optimal yield profile#
+SS <- seq(100,1e4,100)#
+# empty matrix for OLP#
+OYP <- matrix(0,length(SS),length(yieldProps))#
+for(i in 1:mcmc) {#
+	# spawners at MSY#
+	ref.pts[i,"Smsy"] <- (1 - lambert_W0(exp(1-lnA[i]))) / bb[i]#
+	# MSY#
+	ref.pts[i,"MSY"] <- ref.pts[i,"Smsy"]*((exp(lnA[i]-bb[i]*ref.pts[i,"Smsy"])) - 1)#
+	# harvest rate at MSY#
+	ref.pts[i,"Umsy"] <- (1 - lambert_W0(exp(1-lnA[i])))#
+	# yield over varying S#
+	yield <- SS*(exp(lnA[i]-bb[i]*SS) - 1)#
+	for(j in 1:length(yieldProps)) {#
+		OYP[,j] <- OYP[,j] + 1*(yield > yieldProps[j]*ref.pts[i,"MSY"])#
+	}#
+}#
+OYP <- OYP/mcmc
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+## 1#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}#
+#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}#
+#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1.2)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}#
+#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}#
+#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"),#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", lwd=2)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}#
+#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1)#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n")#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}#
+#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n")#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}#
+#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n")#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+}#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+offSet <- 0.07
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+x_lbl <- c(#
+expression(italic(MSY)),#
+expression(italic(S)_{italic(MSY)}),#
+expression(italic(U)_{italic(MSY)})#
+)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=x_lbls[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lbl <- yieldProps#
+for(i in 1:length(x_lbl)) {#
+	x_lbl[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lbl, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lbl, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+x_lbls <- c(#
+expression(italic(MSY)),#
+expression(italic(S)_{italic(MSY)}),#
+expression(italic(U)_{italic(MSY)})#
+)
+x_lbls <- c(#
+expression(italic(MSY)),#
+expression(italic(S)[italic(MSY)]),#
+expression(italic(U)[italic(MSY)])#
+)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=refNames[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=x_lbls[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+x_lbls <- c(#
+expression(italic(MSY)),#
+expression(italic(S[MSY]),#
+expression(italic(S)[italic(MSY)]),#
+expression(italic(U)[italic(MSY)])#
+)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=x_lbls[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+x_lbls <- c(#
+expression(italic(MSY)),#
+expression(italic(S[MSY])),#
+expression(italic(S)[italic(MSY)]),#
+expression(italic(U)[italic(MSY)])#
+)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=x_lbls[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+expression(italic(MSY))
+x_lbls <- c(#
+expression(textstyle(italic(MSY))),#
+expression(italic(S[MSY])),#
+expression(italic(U[MSY]))#
+)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=x_lbls[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+x_lbls <- c(#
+expression(displaystyle(italic(MSY))),#
+expression(italic(S[MSY])),#
+expression(italic(U[MSY]))#
+)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=x_lbls[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+x_lbls <- c(#
+expression(italic(displaystyle(MSY))),#
+expression(italic(S[MSY])),#
+expression(italic(U[MSY]))#
+)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=x_lbls[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+x_lbls <- c(#
+expression(italic(textstyle(MSY))),#
+expression(italic(S[MSY])),#
+expression(italic(U[MSY]))#
+)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=x_lbls[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+x_lbls <- c(#
+expression(italic(scriptstyle(MSY))),#
+expression(italic(S[MSY])),#
+expression(italic(U[MSY]))#
+)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=x_lbls[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+x_lbls <- c(#
+expression(italic(MSY)),#
+expression(italic(S[MSY])),#
+expression(italic(U[MSY]))#
+)
+x_lbls <- c(#
+expression(bolditalic(MSY)),#
+expression(bolditalic(S[MSY])),#
+expression(bolditalic(U[MSY]))#
+)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=x_lbls[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+x_lbls <- c(#
+expression(bold(MSY)),#
+expression(bold(S[MSY])),#
+expression(bold(U[MSY]))#
+)
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=x_lbls[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+data.frame(ttl=c(expression(bold(MSY)),expression(bold(S[MSY])),expression(bold(U[MSY]))))
+expression(bold(MSY))
+expression(bold(S[MSY]))
+expression(bold(U[MSY]))
+c(expression(bold(MSY)),expression(bold(S[MSY])),expression(bold(U[MSY])))
+ttl=c(expression(bold(MSY)),expression(bold(S[MSY])),expression(bold(U[MSY])))
+x_lbls <- ttl
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=x_lbls[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+x_lbls <- data.frame(ttl=expression(bold(MSY), bold(S[MSY]), bold(U[MSY])))
+x_lbls <- expression(bold(MSY), bold(S[MSY]), bold(U[MSY]))
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab="", yaxt="n", main=x_lbls[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+ttl <- expression(bold(MSY), bold(S[MSY]), bold(U[MSY]))#
+x_lbl <- c("Escapement","Escapement","Rate")#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab=l_lbl[i], yaxt="n", main=ttl[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+ttl <- expression(bold(MSY), bold(S[MSY]), bold(U[MSY]))#
+x_lbl <- c("Escapement","Escapement","Rate")#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab=x_lbl[i], yaxt="n", main=ttl[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.1, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
+ttl <- expression(bold(MSY), bold(S[MSY]), bold(U[MSY]))#
+x_lbl <- c("Escapement","Escapement","Rate")#
+plt_dat <- ref.pts#
+plt_dat[plt_dat>1e4] <- 1e4#
+offSet <- 0.07#
+par(mfcol=c(2,2), mai=c(0.8,0.8,0.4,0.1), omi=c(0,0,0,0.2))#
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)#
+for(i in 1:3) {#
+	hist(plt_dat[,refNames[i]],xlim=c(0,max(plt_dat[,refNames[i]])),#
+	     freq=FALSE,breaks=50,col=clr,border="blue3",#
+	     xlab=x_lbl[i], yaxt="n", main=ttl[i], ylab="", cex.lab=1.2)#
+	mtext("Posterior probability", 2, cex=1)#
+	c_CI <- quantile(ref.pts[,refNames[i]],c(0.025,0.5,0.975))#
+	aHt <- (par()$usr[4]-par()$usr[3])/20#
+	arrows(c_CI,par()$usr[3],c_CI,par()$usr[3]-aHt,#
+	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)#
+	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),LETTERS[i])#
+}#
+x_lp <- yieldProps#
+for(i in 1:length(x_lp)) {#
+	x_lp[i] <- SS[max(which(OYP[,i] == max(OYP[,i]) | abs(OYP[,i] - (yieldProps[i]-0.3)) <= 0.05))]#
+}#
+matplot(SS, OYP, type="l", lty="solid", las=1, col=c("slateblue","blue","darkblue"), lwd=2,#
+		xlab="Escapement", ylab="Prob. of meeting XX% of MSY", cex.lab=1.2, bty="n",#
+		main="Optimal yield profiles")#
+points(x=x_lp, y=yieldProps-0.3, pch=21, cex=3.5, col="white", bg="white")#
+text(x=x_lp, y=yieldProps-0.3, paste0(yieldProps*100,"%"),#
+	 col=c("slateblue","blue","darkblue"), cex=0.7)#
+text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),#
+     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"D")
