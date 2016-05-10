@@ -2,7 +2,6 @@
 title: "ASSESSOR: An age-structured state-space stock-recruit model for Pacific salmon"
 output:
   html_document:
-    keep_md: true
     theme: cerulean
     toc: true
     toc_float: true
@@ -232,7 +231,7 @@ dat_cvrs <- dat_cvrs[,-1]
 dat_cvrs <- scale(dat_cvrs)
 ```
 
-## SSSR model in JAGS
+## Model in JAGS
 
 Now we can specify the model in JAGS. Note that the code below is not written to be universally generic with respect to the number of covariates, but rather to emphasize how to incorporate the three in this specific application. The important thing is the number of covariate parameters in the `PRIORS` and `LIKELIHOOD` sections (i.e., there must be a unique `c_` parameter for each of the _MM_ covariates).
 
@@ -439,6 +438,7 @@ init_vals <- function() {
 	     phi=0.5)
 	}
 
+## list of model info for JAGS
 mod_jags <- list(data=dat_jags,
 				 inits=init_vals,
 				 parameters.to.save=par_jags,
