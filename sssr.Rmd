@@ -150,7 +150,7 @@ fn_hrel <- "SkagitHatchRel.csv"
 
 ## time lags (years) for covariates
 flow_lag <- 1
-PDO_lag <- 2
+marine_lag <- 2
 hrel_lag <- 2
 
 ## number of years of forecasts
@@ -218,22 +218,26 @@ dat_harv <- c(dat_harv[,-1],rep(0,n_fore))
 
 ## Loading the covariates
 
-This analysis uses 3 covariates as drivers of the population's instrinic growth rate:
+This analysis uses 6 covariates as drivers of the population's instrinic growth rate:
 
-1. Freshwater flow
-2. Pacific Decadal Oscillation (PDO)
-3. Hatchery releases
+1. Maximum river discharge in winter
+2. Minimum river discharge in summer
+3. Pacific Decadal Oscillation (PDO)
+4. North Pacific Gyre Oscillation (NPGO)
+5. Hatchery releases
 
-### Flow
+### River discharge
 
-We begin by getting the daily flow data from the US Geological Service [National Water Information System](http://waterdata.usgs.gov/nwis). We will use the direct link to the gage data from the Skagit River near Mount Vernon, WA (#12200500), begining with the first year of fish data.
+We begin by getting the daily flow data from the US Geological Service [National Water Information System](http://waterdata.usgs.gov/nwis). We will use the direct link to the gage data from the Skagit River near Mount Vernon, WA (#12178100), beginning with the first year of fish data.
 
 ```{r get_flow_url}
+## flow site
+flow_site <- 12178100
 ## get URL for flow data from USGS
 flow_url <- paste0("http://waterdata.usgs.gov/nwis/dv",
                    "?cb_00060=on",
                    "&format=rdb",
-                   "&site_no=12200500",
+                   "&site_no=",flow_site,
                    "&begin_date=",yr_frst,"-01-01")
 ```
 
@@ -258,80 +262,131 @@ colnames(dat_flow) <- unlist(strsplit(tolower(flow_raw[max(hdr_flow)+1]), split=
 head(dat_flow)
 ```
 
-The column names in the data file are `agency_cd`, `site_no`, `datetime`, `01_00060_00003`, and `01_00060_00003_cd`. The daily flow measurements are in column `01_00060_00003`, so we will only keep `datetime` and `01_00060_00003`, and rename them to `date` and `flow`, respectively.
+The first 3 columns in the data file are the agency (`agency_cd`), location (`site_no`), and date (`datetime`). The daily flow measurements are in the 4th column (``r grep("[0-9]$",colnames(dat_flow), value=TRUE)``), so we will only keep `datetime` and ``r grep("[0-9]$",colnames(dat_flow), value=TRUE)``, and rename them to `date` and `flow`, respectively. We will also convert the units from "cubic feet per second" to "cubic meters per second".
 
 ```{r trim_dat_flow}
-dat_flow <- dat_flow[c("datetime","01_00060_00003")]
+## keep only relevant columns
+dat_flow <- dat_flow[c("datetime",grep("[0-9]$",colnames(dat_flow),value=TRUE))]
+## nicer column names
 colnames(dat_flow) <- c("date","flow")
-```
-
-We are interested in the maximum of the daily peak flows from October through March during the first year that juveniles are rearing in streams. This means we need to combine flow values for the fall of year $t$ with those in the spring of year $t+1$. Therefore, the flow time series will begin in `yr_frst` = `r yr_frst`; the last year of flow data will then be `yr_last - age_min + n_fore + flow_lag` = `r yr_last - age_min + n_fore + flow_lag`.
-
-```{r adj_flow}
+## convert cubic feet to cubic meters
+dat_flow$flow <- dat_flow$flow / 35.3147
 ## flow by year & month
 dat_flow[,"year"] <- as.integer(sub("^([0-9]{4})-([0-9]{2})-([0-9]{2})","\\1",
                                     dat_flow[,"date"]))
 dat_flow[,"month"] <- as.integer(sub("^([0-9]{4})-([0-9]{2})-([0-9]{2})","\\2",
                                      dat_flow[,"date"]))
 dat_flow <- dat_flow[,c("year","month","flow")]
+```
+
+#### Winter maximum
+
+We are interested in the maximum of the daily peak flows from October through March during the first year that juveniles are rearing in streams. This means we need to combine flow values for the fall of year $t$ with those in the spring of year $t+1$. Therefore, the flow time series will begin in ``yr_frst = `r yr_frst``; the last year of flow data will then be ``yr_last - age_min + n_fore + flow_lag = `r yr_last - age_min + n_fore + flow_lag``.
+
+```{r wtr_flow}
 ## autumn flows in year t
 flow_aut <- subset(dat_flow, (month>=10 & month<=12)
-                   & year >= yr_frst & year <= yr_last-age_min+n_fore+flow_lag-1)
+                   & year >= yr_frst & year <= yr_last-age_min+n_fore)
 ## spring flows in year t+1
 flow_spr <- subset(dat_flow, (month>=1 & month<=3)
-                   & year >= yr_frst+1 & year <= yr_last-age_min+n_fore+flow_lag)
-## change year index to brood year
+                   & year >= yr_frst+flow_lag & year <= yr_last-age_min+n_fore+flow_lag)
+## change spr year index to match aut
 flow_spr[,"year"] <- flow_spr[,"year"] - flow_lag
 ## combined flows indexed to brood year and calculate max flow over time period
-dat_flow <- aggregate(flow ~ year, data=rbind(flow_aut,flow_spr), max)
+dat_flow_wtr <- aggregate(flow ~ year, data=rbind(flow_aut,flow_spr), max)
+## change year index to brood year
+dat_flow_wtr[,"year"] <- dat_flow_wtr[,"year"] 
 ## for plotting purpose later
-colnames(dat_flow)[2] <- "Flow"
+colnames(dat_flow_wtr)[2] <- "Winter"
 ```
 
-### Pacific Decadal Oscillation
+#### Summer minimum
 
-We used the monthly PDO data provided by the University of Washington's Joint Institute for the Study of the Atmosphere and Ocean ([JISAO](http://jisao.washington.edu/)), which are available [here](http://research.jisao.washington.edu/pdo/). We begin by downloading the raw PDO data and viewing the metadata.
+Now we will calculate the minimum flow juveniles would experience during their first summer (June through September).
 
-```{r get_PDO_metadata}
-## raw PDO data from UW
-PDO_raw <- readLines("http://research.jisao.washington.edu/pdo/PDO.latest")
+```{r sum_flow}
+## summer flows in year t
+flow_sum <- subset(dat_flow, (month>=6 & month<=9)
+                   & year >= yr_frst+flow_lag & year <= yr_last-age_min+n_fore+flow_lag)
+## change year index to brood year
+flow_sum[,"year"] <- flow_sum[,"year"] - flow_lag
+## combined flows indexed to brood year and calculate max flow over time period
+dat_flow_sum <- aggregate(flow ~ year, data=flow_sum, min)
+## for plotting purpose later
+colnames(dat_flow_sum)[2] <- "Summer"
+```
+
+### North Pacific Gyre Oscillation
+
+We used the monthly NPGO data provided by Emanuele Di Lorenzo, which are available [here](http://www.o3d.org/npgo/npgo.php). We begin by downloading the raw NPGO data and viewing the metadata.
+
+```{r get_NPGO_metadata}
+## URL for NPGO data
+url_NPGO <- "http://www.o3d.org/npgo/npgo.php"
+## raw NPGO data 
+NPGO_raw <- readLines(url_NPGO)
 ## line with data headers
-hdr_pdo <- which(lapply(PDO_raw,grep,pattern="YEAR")==1, arr.ind=TRUE)
+hdr_NPGO <- which(lapply(NPGO_raw,grep,pattern="YEAR")==1, arr.ind=TRUE)
 ## print PDO metadata
-print(PDO_raw[seq(hdr_pdo-1)],quote=FALSE)
+print(NPGO_raw[seq(hdr_NPGO)],quote=FALSE)
 ```
 
-Next, we will extract the actual PDO indices for the years of interest and inspect the file contents.
+Next, we will extract the actual NPGO indices for the years of interest and inspect the file contents. We also want the average NPGO annual index from January 1 through December 31 during the first year that the juvenile steelhead are in the ocean (i.e., during their second year of life). Therefore, we need NPGO values from `yr_frst + marine_lag` = `r yr_frst+marine_lag` through `yr_last - age_min + n_fore + marine_lag` = `r yr_last - age_min + n_fore + marine_lag`.
 
-```{r get_PDO}
-## PDO data for years of interest
-dat_PDO <- read.table("http://research.jisao.washington.edu/pdo/PDO.latest",
-                      header=FALSE, stringsAsFactors=FALSE,
-                      skip=hdr_pdo + yr_frst - 1900 + 1, nrows=n_yrs)
-colnames(dat_PDO) <- unlist(strsplit(tolower(PDO_raw[hdr_pdo]), split="\\s+"))
-dat_PDO
+```{r get_NPGO}
+## NPGO data for years of interest
+dat_NPGO<- read.table(url_NPGO, header=FALSE, stringsAsFactors=FALSE,
+                      skip=hdr_NPGO + (yr_frst-1950)*12, nrows = n_yrs*12)
+colnames(dat_NPGO) <- c("year","month","NPGO")
+
+## select only years of interest indexed by brood year 
+dat_NPGO <- dat_NPGO[dat_NPGO$year >= yr_frst+marine_lag &
+                     dat_NPGO$year <= yr_last-age_min+n_fore+marine_lag,]
+dat_NPGO <- aggregate(dat_NPGO$NPGO, by = list(year = dat_NPGO$year), FUN = mean)
+dat_NPGO <- data.frame(year=seq(yr_frst,yr_last-age_min+n_fore), NPGO=dat_NPGO[,2])
+colnames(dat_NPGO) <- c("year","NPGO")
+dat_NPGO
 ```
 
-We want the average PDO index from April through October during the first six months the juvenile steelhead are in the ocean (i.e., during their second year of life). Therefore, we need PDO values from `yr_frst + PDO_lag` = `r yr_frst+PDO_lag` through `yr_last - age_min + n_fore + PDO_lag` = `r yr_last - age_min + n_fore + PDO_lag`.
+### Spring Transition Index
 
-Also notice that values in the year column in the PDO data file contains an ** superscript from 2002 onward to indicate the switch to version 2 of the sea surface temperature (SST) data. We will fix those as well.
+We calculated the spring transition index (STI) from the daily coastal upwelling index (CUI) provided by NOAA's Pacific Fisheries Environmental Laboratory  ([PFEL](https://www.pfeg.noaa.gov/)); you can find more information [here](https://www.pfeg.noaa.gov/products/PFEL/modeled/indices/PFELindices.html). We begin by downloading the raw CUI data and viewing the metadata.
 
-```{r adj_PDO}
-## fix 'year' col
-dat_PDO[,"year"] <- seq(yr_frst,yr_last)
-## mean PDO from Apr-Oct indexed by brood year
-dat_PDO <- apply(dat_PDO[dat_PDO[,"year"] %in% seq(yr_frst+PDO_lag,yr_last-age_min+n_fore+PDO_lag),
-                         tolower(month.abb)[4:10]],1,mean)
-dat_PDO <- data.frame(year=seq(yr_frst,yr_last-age_min+n_fore), PDO=dat_PDO)
+```{r get_CUI_metadata}
+## URL for CUI data
+url_CUI <- "https://www.pfeg.noaa.gov/products/PFELData/upwell/daily/p06dayac.all"
+## raw CUI data from PFEL
+CUI_raw <- readLines(url_CUI)
+## line with data headers
+hdr_CUI <- which(lapply(CUI_raw,grep,pattern="YYYYMMDD")==1, arr.ind=TRUE)
+## print CUI metadata
+print(CUI_raw[seq(hdr_CUI-1)],quote=FALSE)
+```
+
+```{r get_CUI}
+## get daily CUI data
+dat_CUI <- read.table(url_CUI, header=TRUE, stringsAsFactors=FALSE, skip=hdr_CUI-1)
+## extract year from date
+dat_CUI$yr <- gsub("[0-9]{4}$","",dat_CUI$YYYYMMDD)
+## select only years of interest
+cui <- dat_CUI[dat_CUI$yr >= yr_frst+marine_lag & dat_CUI$yr <= yr_last-age_min+n_fore+marine_lag,]
+## calculate cumulative upwelling by year
+cum_CUI <- tapply(cui[,"Index"], cui$yr, cumsum)
+## function to return spring transition index
+get_STI <- function(x, day_max=200) {
+	return(min(which(x==min(x[1:day_max]))))
+}
+## calc STI for each year
+dat_STI <- data.frame(year=seq(yr_frst,yr_last-age_min+n_fore),STI=sapply(cum_CUI,get_STI))
 ```
 
 ### Hatchery releases
 
-The numbers of hatchery fish released each year is listed in a file on the project site. They have already been lagged 2 years (i.e., brood year + 2) to account for the potential competitive interactions during their juvenile life stage. 
+The numbers of hatchery fish released each year is listed in a file on the project site. They have already been lagged 2 years (i.e., brood year + 2) to account for the potential competitive interactions during their juvenile life stage. (We will divide the release number by 1000 for plotting purposes.)
 
 ```{r get_hatchery_releases}
-dat_hrel <- read.csv(text = getURL(paste0(ex_url,fn_hrel)))
-dat_hrel
+dat_hrel <- read.csv(text = getURL(paste0(ex_url,fn_hrel))) 
+dat_hrel 
 ```
 
 ### Combine all covariates
@@ -340,11 +395,14 @@ The last thing we will do is combine the covariates into one file and standardiz
 
 ```{r combine_covars}
 ## covariate(s)
-dat_cvrs <- merge(merge(dat_flow,dat_PDO),dat_hrel)
+dat_cvrs <- Reduce(function(...) merge(..., all=T),
+                   list(dat_flow_wtr,dat_flow_sum,dat_NPGO,dat_STI,dat_hrel))
 ## drop year col
-dat_cvrs <- dat_cvrs[,-1]
+dat_cvrs <- dat_cvrs[,-1] 
 ## transform the covariates to z-scores
-dat_cvrs <- scale(dat_cvrs)
+scl_cvrs <- scale(dat_cvrs) 
+## total number of covariates
+n_cov <- dim(scl_cvrs)[2] 
 ```
 
 ## Specifying model in JAGS
@@ -365,9 +423,7 @@ model {
 	E_Rkr_a <- mu_Rkr_a + var_Qr/(2 - 2*phi^2);
 
 	## covariate effects
-	c_Flow ~ dnorm(0,0.001);
-	c_PDO ~ dnorm(0,0.001);
-	c_Hrel ~ dnorm(0,0.001);
+  for(i in 1:n_cov) { cc[i] ~ dnorm(0,0.001) }
 
 	## strength of dens depend
 	Rkr_b ~ dunif(0,0.1);
@@ -413,9 +469,10 @@ model {
 	#------------
 	# 1st brood yr requires different innovation
 	# predicted recruits in BY t
-	ln_Rkr_a[1] <- mu_Rkr_a + c_Flow*dat_cvrs[1,1] + c_PDO*dat_cvrs[1,2] + c_Hrel*dat_cvrs[1,3];
-	E_ln_Rec[1] <- ln_Sp[1] + ln_Rkr_a[1] - Rkr_b*Sp[1];
-	tot_ln_Rec[1] ~ dnorm(E_ln_Rec[1] + phi*innov_1,tau_Qr);
+	covar[1] <- inprod(cc,scl_cvrs[1,]);
+	ln_Rkr_a[1] <- mu_Rkr_a + covar[1];
+	E_ln_Rec[1] <- ln_Sp[1] + ln_Rkr_a[1] - Rkr_b*Sp[1] + phi*innov_1;
+	tot_ln_Rec[1] ~ dnorm(E_ln_Rec[1],tau_Qr);
 	res_ln_Rec[1] <- tot_ln_Rec[1] - E_ln_Rec[1];
 	# median of total recruits
 	tot_Rec[1] <- exp(tot_ln_Rec[1]);
@@ -431,9 +488,10 @@ model {
 	# brood years 2:(n_yrs-age_min)
 	for(t in 2:(n_yrs-age_min+n_fore)) {
 		# predicted recruits in BY t
-		ln_Rkr_a[t] <- mu_Rkr_a + c_Flow*dat_cvrs[t,1] + c_PDO*dat_cvrs[t,2] + c_Hrel*dat_cvrs[t,3];
-		E_ln_Rec[t] <- ln_Sp[t] + ln_Rkr_a[t] - Rkr_b*Sp[t];
-		tot_ln_Rec[t] ~ dnorm(E_ln_Rec[t] + phi*res_ln_Rec[t-1],tau_Qr);
+    covar[t] <- inprod(cc,scl_cvrs[t,]);
+		ln_Rkr_a[t] <- mu_Rkr_a + covar[t];
+		E_ln_Rec[t] <- ln_Sp[t] + ln_Rkr_a[t] - Rkr_b*Sp[t] + phi*res_ln_Rec[t-1];
+		tot_ln_Rec[t] ~ dnorm(E_ln_Rec[t],tau_Qr);
 		res_ln_Rec[t] <- tot_ln_Rec[t] - E_ln_Rec[t];
 		# median of total recruits
 		tot_Rec[t] <- exp(tot_ln_Rec[t]);
@@ -449,7 +507,7 @@ model {
 	for(i in 1:(age_min+age_skip)) {
 		ln_tot_Run[i] ~ dnorm(ttl_run_mu*Rec_mu,Rec_tau/ttl_run_tau);
 		tot_Run[i] <- exp(ln_tot_Run[i]);
-	}
+    }
 
 	# get predicted calendar year returns by age
 	# matrix Run has dim [(n_yrs-age_min) x A]
@@ -495,7 +553,7 @@ model {
 	# first cal yr is first brood yr
 	for(t in 1:(n_yrs+n_fore)) {
 		# obs model for spawners
-Sp[t] <- max(1,tot_Run[t] - dat_harv[t]);
+    Sp[t] <- max(1,tot_Run[t] - dat_harv[t]);
 		ln_Sp[t] <- log(Sp[t]);
 		ln_dat_esc[t] ~ dnorm(ln_Sp[t], tau_Rs);
 		}
@@ -518,33 +576,32 @@ Please note that the following code takes ~20 min to run on a quad-core machine 
 
 ```{r start_timer, include=FALSE}
 ## start timer
-timer_start <- proc.time()
+timer_start <- proc.time() 
 ```
 
 ```{r JAGS_IO, message=FALSE, warning=FALSE, cache=TRUE}
 ## data to pass to JAGS
-dat_jags <- c("dat_age","ln_dat_esc","dat_harv","dat_cvrs",
-              "n_yrs","A","age_min","age_max","age_skip","n_fore")
+dat_jags <- c("dat_age","ln_dat_esc","dat_harv","scl_cvrs","n_cov",
+              "n_yrs","A","age_min","age_max","age_skip","n_fore") 
 
 ## 2. model params/states for JAGS to return
-par_jags <- c("alpha","E_Rkr_a","mu_Rkr_a","Rkr_b",
-              "c_Flow","c_PDO","c_Hrel",
+par_jags <- c("alpha","E_Rkr_a","mu_Rkr_a","Rkr_b","ln_Rkr_a",
+              "cc",
               "Sp","Rec","tot_ln_Rec","ln_RS","p_vec",
               "var_Qr","var_Rs","res_ln_Rec")
 
 ## 3. MCMC control params
 # MCMC parameters
 mcmc_chains <- 4
-mcmc_length <- 10e5
-mcmc_burn <- 5e5
-mcmc_thin <- 1000
+mcmc_length <- 5e5
+mcmc_burn <- 2.5e5
+mcmc_thin <- 500
 # total number of MCMC samples
 mcmc_samp <- (mcmc_length-mcmc_burn)*mcmc_chains/mcmc_thin
 
 ## function to create JAGS inits
 init_vals <- function() {
-#	list(mu_Rkr_a=1, c_Flow=runif(1,-0.1,0.1), c_PDO=runif(1,-0.1,0.1), c_Hrel=runif(1,-0.1,0.1),
-	list(mu_Rkr_a=1, c_Flow=rnorm(1,0,0.1), c_PDO=rnorm(1,0,0.1), c_Hrel=rnorm(1,0,0.1),
+	list(mu_Rkr_a=1, cc=rnorm(n_cov,0,0.1),
 	     Rkr_b=1/exp(mean(ln_dat_esc, na.rm=TRUE)),
 	     p_pi=1, p_mu=rep(1,A),
 	     p_vec=matrix(c(0.01,0.3,0.48,0.15,0.05,0.01),n_yrs-age_min+n_fore,A,byrow=TRUE),
@@ -557,14 +614,14 @@ init_vals <- function() {
 
 ## list of model info for JAGS
 mod_jags <- list(data=dat_jags,
-				 inits=init_vals,
-				 parameters.to.save=par_jags,
-				 model.file=fn_jags,
-				 n.chains=as.integer(mcmc_chains),
-				 n.iter=as.integer(mcmc_length),
-				 n.burnin=as.integer(mcmc_burn),
-				 n.thin=as.integer(mcmc_thin),
-				 DIC=TRUE)
+                 inits=init_vals,
+                 parameters.to.save=par_jags,
+                 model.file=fn_jags,
+                 n.chains=as.integer(mcmc_chains),
+                 n.iter=as.integer(mcmc_length),
+                 n.burnin=as.integer(mcmc_burn),
+                 n.thin=as.integer(mcmc_thin),
+                 DIC=TRUE)
 
 ## fit the model in JAGS & store results
 mod_fit <- do.call(jags.parallel, mod_jags)
@@ -601,48 +658,40 @@ idx <- as.integer(sub("(^.*\\[)([0-9]{1,3})(.*)","\\2",names(bad_Rhat)))
 (df <- data.frame(par=par_names, index=idx))
 ```
 
-The convergence statistics indicate that some of the elements in $p$ the estimated proportions of the youngest and oldest age classes (i.e., 3 and 8, respectively) did not converge to our desired threshold. However, there is very little data to inform those parameters, so we should not be too concerned.
+The convergence statistics indicate that some of the elements in $p$ for the estimated proportions of the youngest and oldest age classes (i.e., 3 and 8, respectively) did not converge to our desired threshold. However, there is very little data to inform those parameters, so we should not be too concerned.
 
 ## Main results
 
 Here is a table of summary statistics for some of the model parameters.
 
 ```{r tbl_summary_stats}
-print(mod_fit$BUGSoutput$summary[c("E_Rkr_a","alpha","Rkr_b",
-                                   "c_Flow","c_PDO","c_Hrel",
-                                   "var_Qr","var_Rs"),
-                                 c("mean","sd","2.5%","50%","97.5%")],
-      digits=3,quote=FALSE,justify="right")
+tbl_smry <- mod_fit$BUGSoutput$summary[c("E_Rkr_a","Rkr_b",
+                                         paste0("cc[",seq(n_cov),"]"),
+                                         "var_Qr","var_Rs"),
+                                       c("mean","sd","2.5%","50%","97.5%")]
+rownames(tbl_smry)[seq(n_cov)+2] <- colnames(dat_cvrs)                                 
+print(tbl_smry,digits=3,quote=FALSE,justify="right")
 ```
-
-Here are a series of figures summarizing model output.
 
 ### Spawner-recruit relationship
 
-Here is the relationship between spawner and subsequent recruits (a), assuming mean values for all covariates. Gray lines show 100 possible relationships based on random draws from the posterior distributions for the productivity (b) and density-dependence parameters (c). Note that for plotting purposes only in (b) and (c), the density in the largest bin for each parameter contains counts for all values greater or equal to that. Vertical arrows under the x-axes in (b) and (c) indicate the 2.5^th^, 50^th^, and 97.5^th^ percentiles.
+Here is the relationship between spawner and subsequent recruits (a), assuming mean values for all covariates. Gray lines show the median relationship for each of the `r n_yrs` years based on $a_t$. Note that for plotting purposes only in (b) and (c), the density in the largest bin for each parameter contains counts for all values greater or equal to that. Vertical arrows under the x-axes in (b) and (c) indicate the 2.5^th^, 50^th^, and 97.5^th^ percentiles.
 
-```{r plot_SR, fig.width=8, fig.height=5, fig.pos="placeHere"}
+```{r plot_S_R, fig.width=8, fig.height=5, fig.pos="placeHere"}
 layout(matrix(c(1,1,2,3),2,2),c(3,2),c(1,1))
-CI.vec <- c(0.025,0.5,0.975)
-MC <- 100
+CI_vec <- c(0.025,0.5,0.975)
 offSet <- 0.06
-set.seed(123)
-idx <- sample(seq(mcmc_samp),MC)
 
 ## posterior of spawners
-sDat <- apply(mod_fit$BUGSoutput$sims.list$Sp,2,sort)
-sDat <- apply(sDat,2,function(x) { x[mcmc_samp*CI.vec] })
-sDat[2,] <- apply(mod_fit$BUGSoutput$sims.list$Sp,2,median)
+sDat <- apply(mod_fit$BUGSoutput$sims.list$Sp,2,quantile,CI_vec)
 sDat <- sDat[,1:(n_yrs-age_min+n_fore)]
-
 ## posterior of recruits
-rDat <- apply(mod_fit$BUGSoutput$sims.list$tot_ln_Rec,2,sort)
-rDat <- apply(rDat,2,function(x) { x[mcmc_samp*CI.vec] })
-rDat <- exp(rDat)
-ln_a <- exp(matrix(mod_fit$BUGSoutput$sims.array[,,"E_Rkr_a"],ncol=1))
-bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"], ncol=1)
+rDat <- exp(apply(mod_fit$BUGSoutput$sims.list$tot_ln_Rec,2,quantile,CI_vec))
+## median values for a & b
+aa <- apply(mod_fit$BUGSoutput$sims.list$ln_Rkr_a,2,median)
+bb <- apply(mod_fit$BUGSoutput$sims.list$Rkr_b,2,median)
 
-## plot of spawner-recruit relationship
+## empty plot space for spawner-recruit relationships
 dd <- 3000
 yM <- Re2prec(max(rDat),"ceiling",dd)
 yM <- 30000
@@ -653,7 +702,8 @@ plot(sDat[2,],rDat[2,], xlim=c(0,xM), ylim=c(0,yM), pch=16, col="blue3", type="n
 	 xaxt="n", yaxt="n")
 axis(1, at=seq(0,xM,dd*2), labels=seq(0,xM,dd*2)/1000)
 axis(2, at=seq(0,yM,dd*2), labels=seq(0,yM,dd*2)/1000)
-for(i in 1:MC) { lines(ln_a[idx[i]]*seq(xM)*exp(-bb[idx[i]]*seq(xM)), col="darkgray") }
+for(i in 1:length(aa)) { lines(seq(xM)*exp(aa[i]-bb*seq(xM)), col="darkgray") }
+## add S-R estimates and medians
 abline(a=0,b=1,lty="dashed")
 nCB <- n_yrs-age_max
 points(sDat[2,1:nCB],rDat[2,1:nCB], xlim=c(0,xM), ylim=c(0,yM), pch=16, col="blue3")
@@ -684,79 +734,67 @@ mtext(expression(paste("Instrinsic productivity ",(e^italic(a)))), 1, line=3, ce
 text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),
 	 y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"(b)")
 
-## posterior for 1/b
+## posterior for a/b
 par(mai=c(0.8,0.4,0.3,0.1))
-R_b_est <- 1/mod_fit$BUGSoutput$sims.list$Rkr_b
+aa <- matrix(mod_fit$BUGSoutput$sims.array[,,"E_Rkr_a"],ncol=1)
+bb <- matrix(mod_fit$BUGSoutput$sims.array[,,"Rkr_b"],ncol=1)
+R_b_est <- aa/bb
+R_b_est <- R_b_est[R_b_est > 0]
 R_b_CI <- quantile(R_b_est,c(0.025,0.5,0.975))
 R_b_est[R_b_est>2e4] <- 2e4
-brks <- seq(Re2prec(min(R_b_est),"floor",2000),2e4,500)
+brks <- seq(Re2prec(min(R_b_est),"floor",2000),2e4,length.out=length(seq(0,9,0.2)))
 hist(R_b_est, freq=FALSE, breaks=brks, col=clr, border="blue3",
 	 xlab="", xaxt="n", yaxt="n",
 	 main="", ylab="", cex.lab=1.2)
-axis(1, at=seq(Re2prec(min(R_b_est),"floor",2000),2e4,4000))
+axis(1, at=seq(Re2prec(min(R_b_est),"floor",2000),1.8e4,4000))
 aHt <- (par()$usr[4]-par()$usr[3])/12
 arrows(R_b_CI,par()$usr[3],R_b_CI,par()$usr[3]-aHt,
        code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)
-mtext(expression(paste("Carrying capacity (",1/italic(b),")")), 1, line=3, cex=1)
+mtext(expression(paste("Carrying capacity (",italic(a)/italic(b),")")), 1, line=3, cex=1)
 text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),
 	 y=par()$usr[4]-offSet*diff(par()$usr[3:4]),"(c)")
 ```
 
 ### Covariate effects
 
-Here are time series plots of the standardized covariates (a-c) and histograms of their effects on productivity (d-f).
+Here are time series plots of the covariates (a-e) and histograms of their effects on productivity (f-j).
 
-```{r plot_cov_effects, fig.width=8, fig.height=8.5, fig.pos="placeHere", warnings=FALSE, messages=FALSE}
+```{r plot_cov_effects, fig.width=8, fig.height=10, fig.pos="placeHere", warnings=FALSE, messages=FALSE}
+clr <- rgb(0, 0, 255, alpha = 50, maxColorValue = 255)
 offSet <- 0.07
-c_est <- mod_fit$BUGSoutput$sims.matrix[,grep("c_",names(mod_fit$BUGSoutput$sims.list),value=TRUE)]
-par(mfrow=c(ncol(c_est),2), mai=c(0.4,0.2,0.1,0.1), omi=c(0.2,0.4,0,0))
+c_est <- mod_fit$BUGSoutput$sims.list$cc
+par(mfrow=c(n_cov,2), mai=c(0.4,0.2,0.1,0.1), omi=c(0.2,0.5,0,0))
 ylN <- floor(min(c_est)*10)/10
 ylM <- ceiling(max(c_est)*10)/10
 brks <- seq(ylN,ylM,length.out=diff(c(ylN,ylM))*40+1)
-cov_names <- c("Flow","PDO","H releases")
+cov_names <- c(expression(paste("Max flow (",m^3," ",s^{-1},")")),
+               expression(paste("Min flow (",m^3," ",s^{-1},")")),
+               "NPGO",
+               "STI (day of year)",
+               expression(paste("H releases (",10^3,")")))
 t_idx <- seq(yr_frst,length.out=n_yrs-age_min+n_fore)
-for(i in 1:ncol(c_est)) {
+for(i in 1:n_cov) {
+  if(i==5) {dat_cvrs[,i] <- dat_cvrs[,i]/1000}
 	## plot covar ts
 	plot(t_idx, dat_cvrs[seq(length(t_idx)),i], xlab="", ylab="",
 		 main="", cex.axis=1.2, pch=16, col="blue3", type="o")
 	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]),
 	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),paste0("(",letters[i],")"), cex=1.2)
 	mtext(side=2, cov_names[i], line=3, cex=1.2)
-	if(i==ncol(c_est)) { mtext(side=1,"Brood year", line=3) }
+	if(i==n_cov) { mtext(side=1,"Brood year", line=3) }
 	## plot covar effect
-	hist(c_est[,grep(colnames(dat_cvrs)[i],colnames(c_est))],
+	hist(c_est[,i],
 	     freq=FALSE,breaks=brks,col=clr,border="blue3",
 	     xlab="", yaxt="n", main="", ylab="", cex.axis=1.2)
-	c_CI <- quantile(c_est[,grep(colnames(dat_cvrs)[i],colnames(c_est))],c(0.025,0.5,0.975))
+	c_CI <- quantile(c_est[,i],c(0.025,0.5,0.975))
 	aHt <- (par()$usr[4]-par()$usr[3])/20
 	arrows(c_CI,par()$usr[3]-0.005,c_CI,par()$usr[3]-aHt,
 	       code=1,length=0.05,xpd=NA,col="blue3",lwd=1.5)
 	abline(v=0, lty="dashed")
 	text(x=par()$usr[1]+par()$pin[2]/par()$pin[1]*offSet*diff(par()$usr[1:2]), cex=1.2,
-	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),paste0("(",letters[i+ncol(c_est)],")"))
-	if(i==ncol(c_est)) { mtext(side=1,"Effect size", line=3) }
+	     y=par()$usr[4]-offSet*diff(par()$usr[3:4]),paste0("(",letters[i+n_cov],")"))
+	if(i==n_cov) { mtext(side=1,"Effect size", line=3) }
 }
-```
-
-### Total population size
-
-Here is our estimate of the total run size (i.e., catch + escapement) over time, which includes a forecast for 2016. The black points are the data, the blue line is the median posterior estimate, and the shaded region is the 95% credible interval. Note that the y-axis is on a log scale.
-
-```{r plot_run_size, fig.width=6, fig.height=4, fig.pos="placeHere"}
-pDat <- apply(mod_fit$BUGSoutput$sims.list$Sp,2,sort)
-pDat <- apply(pDat,2,function(x) { x[mcmc_samp*CI.vec] })
-pDat <- pDat + matrix(dat_harv,length(CI.vec),n_yrs+n_fore,byrow=TRUE)
-t_idx_f <- seq(yr_frst,length.out=n_yrs+n_fore)
-ypMin <- min(pDat)
-ypMax <- max(pDat)
-par(mai=c(0.8,0.8,0.1,0.1), omi=c(0,0.2,0.1,0.2))
-plot(t_idx_f,pDat[3,], ylim=c(ypMin,ypMax), type="n", log="y", xaxt="n", yaxt="n",
-	 xlab="Year", ylab="Catch + escapement", main="", cex.lab=1.2)
-polygon(c(t_idx_f,rev(t_idx_f)),c(pDat[3,],rev(pDat[1,])), col=clr, border=NA)
-lines(t_idx_f, pDat[2,], col="blue3", lwd=2)
-points(t_idx_f, exp(ln_dat_esc)+dat_harv, pch=16, cex=1)
-axis(1,at=seq(1980,2015,5))
-axis(2,at=c(4000,8000,16000))
 ```
 
 ### Management reference points
@@ -857,6 +895,54 @@ hist(aer, col=clr, border="blue3", breaks=seq(0,40)/40,
 	  main="", yaxs="i", xaxt="n",yaxt="n",ylab="")
 ```
 
+### Total population size
+
+Here is our estimate of the total run size (i.e., catch + escapement) over time, which includes a forecast for 2016. The black points are the data, the blue line is the median posterior estimate, and the shaded region is the 95% credible interval. Note that the y-axis is on a log scale.
+
+```{r plot_run_size, fig.width=6, fig.height=4.5, fig.pos="placeHere"}
+pDat <- apply(mod_fit$BUGSoutput$sims.list$Sp,2,quantile,probs=CI_vec)
+pDat <- pDat + matrix(dat_harv,length(CI_vec),n_yrs+n_fore,byrow=TRUE)
+t_idx_f <- seq(yr_frst,length.out=n_yrs+n_fore)
+ypMin <- min(pDat)
+ypMax <- max(pDat)
+par(mai=c(0.8,0.8,0.1,0.1), omi=c(0.5,0.2,0.1,0.2))
+plot(t_idx_f,pDat[3,], ylim=c(ypMin,ypMax), type="n", log="y", xaxt="n", yaxt="n",
+	 xlab="Year", ylab="Catch + escapement", main="", cex.lab=1.2)
+polygon(c(t_idx_f,rev(t_idx_f)),c(pDat[3,],rev(pDat[1,])), col=clr, border=NA)
+lines(t_idx_f, pDat[2,], col="blue3", lwd=2)
+points(t_idx_f, exp(ln_dat_esc)+dat_harv, pch=16, cex=1)
+axis(1,at=seq(1980,2015,5))
+axis(2,at=c(4000,8000,16000))
+```
+
+Here are several percentiles for the 2016 forecast for the total run size (i.e., catch + escapement).
+
+```{r forecast_2016}
+data.frame(forecast=round(quantile(mod_fit$BUGSoutput$sims.list$Sp[,n_yrs+n_fore],
+                                   probs=c(0.025,0.25,0.5,0.75,0.975))))
+```
+
+### Correlation of innovations & SAR
+
+Here is our estimate of the correlation between the model innovations (i.e, process residuals) and the smolt-to-adult return rate (i.e., logit transformed proportion of smolts that survive to adulthood) of hatchery steelhead from the Skagit R (Neala Kendall, WDFW, Olympia, WA, unpublished data). This gives an indication as to whether the unexplained variance in the productivity of wild fish might be related to the marine environment.
+
+```{r SAR_correl}
+## get SAR data
+dat_SAR <- read.csv(text = getURL(paste0(ex_url,"SkagitHatcherySAR.csv")))
+## match brood yr to smolt outmigration yr
+dat_SAR$br_yr <- dat_SAR$out_yr - 2
+## get innov
+innov <- t(mod_fit$BUGSoutput$sims.list$res_ln_Rec)
+## trim to same brood yrs as SAR data
+innov <- innov[t_idx %in% dat_SAR$br_yr,]
+## compute correlation over all mcmc samples
+cor_vec <- apply(innov,2,function(x) { cor(qlogis(dat_SAR$SAR),x) })
+## print median -/+ 95% credible interval
+print(quantile(cor_vec,CI_vec), digits=2)
+```
+
+The distribution of correlation coefficients has a median of 0.29, with a 95% credible interval of (0.032,0.52), which would suggest that the productivity of wild steelhead from the Skagit is also affected by the marine environment.
+
 ***
 
 ## Additional results
@@ -868,7 +954,7 @@ The following results are not reported in the main manuscript, but are presented
 Here is the estimate of the number of spawners over time. The black points are the data, the blue line is the median posterior estimate, and the shaded region is the 95% credible interval. Note that there are no estimates of spawners in 1996 & 1997.
 
 ```{r plot_spawners, fig.width=6, fig.height=4, fig.pos="placeHere"}
-pDat <- apply(mod_fit$BUGSoutput$sims.list$Sp,2,quantile,CI.vec)
+pDat <- apply(mod_fit$BUGSoutput$sims.list$Sp,2,quantile,CI_vec)
 ypMin <- min(pDat[,1:n_yrs])
 ypMax <- max(pDat[,1:n_yrs])
 t_idx_T <- seq(yr_frst,length.out=n_yrs)
@@ -887,9 +973,9 @@ axis(2,at=c(3000,6000,12000))
 Here are the estimated total number of recruits by brood year (note that the y-axis is on a log scale). Again the uncertainty increases in recent years because fewer complete age classes have been observed.
 
 ```{r plot_total_recruits, fig.width=6, fig.height=4, fig.pos="placeHere"}
-CI.vec <- c(0.025,0.5,0.975)
+CI_vec <- c(0.025,0.5,0.975)
 pDat <- apply(mod_fit$BUGSoutput$sims.list$Rec,c(1,2),sum)
-pDat <- apply(apply(pDat,2,sort),2,function(x) { x[mcmc_samp*CI.vec] })
+pDat <- apply(apply(pDat,2,sort),2,function(x) { x[mcmc_samp*CI_vec] })
 ypMin <- min(pDat)
 ypMax <- max(pDat)
 t_idx_a <- seq(yr_frst,length.out=n_yrs-age_min+n_fore)
@@ -907,7 +993,7 @@ Here is the time series of estimated recruits-per-spawner. Values above (below) 
 
 ```{r plot_R_per_S, fig.width=6, fig.height=4, fig.pos="placeHere"}
 pDat <- apply(mod_fit$BUGSoutput$sims.list$ln_RS,2,sort)
-pDat <- apply(pDat,2,function(x) { x[mcmc_samp*CI.vec] })
+pDat <- apply(pDat,2,function(x) { x[mcmc_samp*CI_vec] })
 pDat[2,] <- apply(mod_fit$BUGSoutput$sims.list$ln_RS,2,median)
 ypMin <- min(pDat)
 ypMax <- max(pDat)
@@ -944,13 +1030,13 @@ text(par()$usr[2],lbl[5],"7&8", xpd=NA, pos=4, offset=0.15, col="black", cex=0.7
 Here are the estimated number of recruits by brood year and age. Note that the uncertainty increases in recent years as fewer complete age classes have been observed.
 
 ```{r plot_recruits_by_age, fig.width=6, fig.height=6, fig.pos="placeHere"}
-CI.vec <- c(0.05,0.5,0.95)
+CI_vec <- c(0.05,0.5,0.95)
 par(mfrow=c(A,1), mai=c(0.1,0.1,0.05,0.1), omi=c(0.5,0.5,0.1,0))
 t_idx_R <- seq(yr_frst,length.out=nRec+n_fore)
 pltTT <- seq(min(round(t_idx_R/5,0)*5),max(round(t_idx_R/5,0)*5),5)
 for(i in rev(1:A)) {
 	pDat <- apply(mod_fit$BUGSoutput$sims.list$Rec[,,i],2,sort)
-	pDat <- apply(pDat,2,function(x) { x[mcmc_samp*CI.vec] })/100
+	pDat <- apply(pDat,2,function(x) { x[mcmc_samp*CI_vec] })/100
 	dd <- ifelse(max(pDat)<20,1,10)
 	ypMax <- Re2prec(max(pDat),prec=dd)
 	while(ypMax %% 3 != 0) { ypMax <- ypMax + dd }
@@ -968,14 +1054,27 @@ mtext("Recruits (100s)", 2, line=2, outer=TRUE, cex=1.2)
 mtext("Year", 1, line=2.5, outer=TRUE, cex=1.2)
 ```
 
+### Time-varying productivity
+
+Here is the time series of the time-varying productivity ($a_t$), which includes the cumulative effects of the `r n_cov` covariates.
+
+```{r plot_prod_over_time, fig.width=6, fig.height=4, fig.pos="placeHere"}
+pDat <- apply(mod_fit$BUGSoutput$sims.list$ln_Rkr_a,2,quantile,CI_vec)
+ypMin <- min(pDat)
+ypMax <- max(pDat)
+par(mai=c(0.8,0.8,0.1,0.1), omi=c(0,0.2,0.1,0.2))
+plot(t_idx_a,pDat[3,], ylim=c(ypMin,ypMax), type="n", #log="y",
+	 xlab="Brood year", ylab="Productivity", main="", cex.lab=1.2)
+polygon(c(t_idx_a,rev(t_idx_a)),c(pDat[3,],rev(pDat[1,])), col=clr, border=NA)
+lines(t_idx_a, pDat[2,], col="blue3", lwd=2)
+```
+
 ### Innovations
 
 Here is the time series of the so-called "innovations", which are the residuals from the process model. They give some indication of population productivity after accounting for the effects of density dependence.
 
 ```{r plot_innovations, fig.width=6, fig.height=4, fig.pos="placeHere"}
-pDat <- apply(mod_fit$BUGSoutput$sims.list$res_ln_Rec,2,sort)
-pDat <- apply(pDat,2,function(x) { x[mcmc_samp*CI.vec] })
-pDat[2,] <- apply(mod_fit$BUGSoutput$sims.list$res_ln_Rec,2,median)
+pDat <- apply(mod_fit$BUGSoutput$sims.list$res_ln_Rec,2,quantile,CI_vec)
 ypMin <- min(pDat)
 ypMax <- max(pDat)
 par(mai=c(0.8,0.8,0.1,0.1), omi=c(0,0.2,0.1,0.2))

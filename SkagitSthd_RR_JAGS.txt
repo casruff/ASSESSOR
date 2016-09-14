@@ -11,9 +11,7 @@ model {
 	E_Rkr_a <- mu_Rkr_a + var_Qr/(2 - 2*phi^2);
 
 	## covariate effects
-	c_Flow ~ dnorm(0,0.001);
-	c_PDO ~ dnorm(0,0.001);
-	c_Hrel ~ dnorm(0,0.001);
+  for(i in 1:n_cov) { cc[i] ~ dnorm(0,0.001) }
 
 	## strength of dens depend
 	Rkr_b ~ dunif(0,0.1);
@@ -59,9 +57,10 @@ model {
 	#------------
 	# 1st brood yr requires different innovation
 	# predicted recruits in BY t
-	ln_Rkr_a[1] <- mu_Rkr_a + c_Flow*dat_cvrs[1,1] + c_PDO*dat_cvrs[1,2] + c_Hrel*dat_cvrs[1,3];
-	E_ln_Rec[1] <- ln_Sp[1] + ln_Rkr_a[1] - Rkr_b*Sp[1];
-	tot_ln_Rec[1] ~ dnorm(E_ln_Rec[1] + phi*innov_1,tau_Qr);
+	covar[1] <- inprod(cc,scl_cvrs[1,]);
+	ln_Rkr_a[1] <- mu_Rkr_a + covar[1];
+	E_ln_Rec[1] <- ln_Sp[1] + ln_Rkr_a[1] - Rkr_b*Sp[1] + phi*innov_1;
+	tot_ln_Rec[1] ~ dnorm(E_ln_Rec[1],tau_Qr);
 	res_ln_Rec[1] <- tot_ln_Rec[1] - E_ln_Rec[1];
 	# median of total recruits
 	tot_Rec[1] <- exp(tot_ln_Rec[1]);
@@ -77,9 +76,10 @@ model {
 	# brood years 2:(n_yrs-age_min)
 	for(t in 2:(n_yrs-age_min+n_fore)) {
 		# predicted recruits in BY t
-		ln_Rkr_a[t] <- mu_Rkr_a + c_Flow*dat_cvrs[t,1] + c_PDO*dat_cvrs[t,2] + c_Hrel*dat_cvrs[t,3];
-		E_ln_Rec[t] <- ln_Sp[t] + ln_Rkr_a[t] - Rkr_b*Sp[t];
-		tot_ln_Rec[t] ~ dnorm(E_ln_Rec[t] + phi*res_ln_Rec[t-1],tau_Qr);
+    covar[t] <- inprod(cc,scl_cvrs[t,]);
+		ln_Rkr_a[t] <- mu_Rkr_a + covar[t];
+		E_ln_Rec[t] <- ln_Sp[t] + ln_Rkr_a[t] - Rkr_b*Sp[t] + phi*res_ln_Rec[t-1];
+		tot_ln_Rec[t] ~ dnorm(E_ln_Rec[t],tau_Qr);
 		res_ln_Rec[t] <- tot_ln_Rec[t] - E_ln_Rec[t];
 		# median of total recruits
 		tot_Rec[t] <- exp(tot_ln_Rec[t]);
@@ -95,7 +95,7 @@ model {
 	for(i in 1:(age_min+age_skip)) {
 		ln_tot_Run[i] ~ dnorm(ttl_run_mu*Rec_mu,Rec_tau/ttl_run_tau);
 		tot_Run[i] <- exp(ln_tot_Run[i]);
-	}
+    }
 
 	# get predicted calendar year returns by age
 	# matrix Run has dim [(n_yrs-age_min) x A]
@@ -141,7 +141,7 @@ model {
 	# first cal yr is first brood yr
 	for(t in 1:(n_yrs+n_fore)) {
 		# obs model for spawners
-Sp[t] <- max(1,tot_Run[t] - dat_harv[t]);
+    Sp[t] <- max(1,tot_Run[t] - dat_harv[t]);
 		ln_Sp[t] <- log(Sp[t]);
 		ln_dat_esc[t] ~ dnorm(ln_Sp[t], tau_Rs);
 		}
